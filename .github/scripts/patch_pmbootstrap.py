@@ -1,72 +1,49 @@
 #!/usr/bin/env python3
-"""Patch pmbootstrap source files for CI robustness."""
-import os, re
+from pathlib import Path
+import re
 
-ws = os.environ['GITHUB_WORKSPACE']
-pmb_root = os.path.join(ws, 'pmbootstrap')
+ROOT = Path("pmbootstrap/pmb")
 
-# --- Fix 1: blockdevice.py - re-init chroot_native if deleted post-build ---
-bd = os.path.join(pmb_root, 'pmb', 'install', 'blockdevice.py')
-with open(bd) as f:
-    c = f.read()
+def patch_file(path: Path, transform, label: str):
+    text = path.read_text()
+    new = transform(text)
+    if new != text:
+        path.write_text(new)
+        print(f"✓ Patched {path}: {label}")
+        return True
+    print(f"- No change {path}: {label}")
+    return False
 
-c = c.replace('import pmb.helpers.mount',
-              'import pmb.chroot\nimport pmb.helpers.mount')
+# 1) Asegurar que el chroot nativo instale losetup completo
+config_init = ROOT / "config" / "__init__.py"
+if config_init.exists():
+    def add_losetup_to_native_packages(text: str) -> str:
+        if '"losetup"' in text or "'losetup'" in text:
+            return text
 
-old = re.compile(r'^(\s+)# Create empty image files\s*\n\s+pmb\.chroot\.user\(\["mkdir",\s*"-p",\s*"/home/pmos/rootfs"\]\)',
-                 re.MULTILINE)
+        # Caso típico: lista con util-linux, parted, cryptsetup, qemu-...
+        text = text.replace('"util-linux",', '"util-linux",\n "losetup",')
+        text = text.replace("'util-linux',", "'util-linux',\n 'losetup',")
+        return text
 
-def replacer_blockdev(m):
-    ws = m.group(1)
-    body_ws = ws + '    '
-    return (
-        f'{ws}# Re-init native chroot if pmbootstrap deleted it\n'
-        f'{ws}if not Chroot.native().exists():\n'
-        f'{body_ws}pmb.chroot.init(Chroot.native())\n'
-        f'\n'
-        f'{ws}# Create empty image files\n'
-        f'{ws}pmb.chroot.user(["mkdir", "-p", "/home/pmos/rootfs"])'
-    )
+    patch_file(config_init, add_losetup_to_native_packages, "add losetup to native packages")
 
-c = old.sub(replacer_blockdev, c)
-with open(bd, 'w') as f:
-    f.write(c)
-print("✓ Patched blockdevice.py: chroot_native re-init")
+# 2) Parche fuerte: todo losetup interno debe apuntar a /usr/sbin/losetup
+losetup_py = ROOT / "install" / "losetup.py"
+if losetup_py.exists():
+    def force_usr_sbin_losetup(text: str) -> str:
+        # Deshacer parche anterior incorrecto a /sbin/losetup
+        text = text.replace('"/sbin/losetup"', '"/usr/sbin/losetup"')
+        text = text.replace("'/sbin/losetup'", "'/usr/sbin/losetup'")
 
-# --- Fix 2: losetup.py - use /sbin/losetup (util-linux, not busybox) ---
-# Only patch pmb.chroot.root calls (inside Alpine native chroot, where
-# busybox /bin/losetup shadows util-linux /sbin/losetup).
-# Do NOT patch pmb.helpers.run.root calls (Ubuntu host already has full losetup).
-lp = os.path.join(pmb_root, 'pmb', 'install', 'losetup.py')
-with open(lp) as f:
-    c = f.read()
+        # Convertir llamadas directas ["losetup", ...] a ["/usr/sbin/losetup", ...]
+        text = text.replace('["losetup"', '["/usr/sbin/losetup"')
+        text = text.replace("['losetup'", "['/usr/sbin/losetup'")
 
-# Patch pmb.chroot.root calls (inside Alpine native chroot)
-c = c.replace('pmb.chroot.root(["losetup"',
-              'pmb.chroot.root(["/sbin/losetup"')
-# Also patch losetup_cmd variable definition in mount()
-c = c.replace('["losetup", "-f", "-P", img_path]',
-              '["/sbin/losetup", "-f", "-P", img_path]')
+        # Si hay variable cmd = "losetup"
+        text = re.sub(r'=\s*"losetup"', '= "/usr/sbin/losetup"', text)
+        text = re.sub(r"=\s*'losetup'", "= '/usr/sbin/losetup'", text)
 
-with open(lp, 'w') as f:
-    f.write(c)
-print("✓ Patched losetup.py: /sbin/losetup in chroot calls (Alpine util-linux)")
+        return text
 
-# --- Fix 3: config/__init__.py - add "losetup" package to install_native_packages ---
-cp = os.path.join(pmb_root, 'pmb', 'config', '__init__.py')
-with open(cp) as f:
-    c = f.read()
-
-# Match the literal install_native_packages list (contains "util-linux", "parted") 
-# NOT "losetup": "" in the binary check dict above.
-old_line = 'install_native_packages = ["cryptsetup", "util-linux", "parted"]'
-new_line = 'install_native_packages = ["cryptsetup", "util-linux", "losetup", "parted"]'
-if old_line in c:
-    c = c.replace(old_line, new_line)
-    with open(cp, 'w') as f:
-        f.write(c)
-    print("✓ Patched config/__init__.py: losetup in install_native_packages")
-elif new_line in c:
-    print("  (install_native_packages already has losetup ✓)")
-else:
-    print("  ⚠ Could not find install_native_packages line in config/__init__.py")
+    patch_file(losetup_py, force_usr_sbin_losetup, "force /usr/sbin/losetup")
