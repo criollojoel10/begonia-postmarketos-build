@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 from pathlib import Path
-import re, os
+import re
 
 ROOT = Path("pmbootstrap/pmb")
 
@@ -40,7 +40,7 @@ if losetup_py.exists():
         text = text.replace('["losetup"', '["/usr/sbin/losetup"')
         text = text.replace("['losetup'", "['/usr/sbin/losetup'")
 
-        # Si hay variable cmd = "losetup"
+        # Si hay variable cmd = "losetup" o losetup_cmd
         text = re.sub(r'=\s*"losetup"', '= "/usr/sbin/losetup"', text)
         text = re.sub(r"=\s*'losetup'", "= '/usr/sbin/losetup'", text)
 
@@ -48,60 +48,39 @@ if losetup_py.exists():
 
     patch_file(losetup_py, force_usr_sbin_losetup, "force /usr/sbin/losetup")
 
-# 3) Parche defensivo en blockdevice.py: si chroot_native desaparece, reinit
-blockdevice_py = ROOT / "install" / "blockdevice.py"
-if blockdevice_py.exists():
-    def patch_blockdevice(text: str) -> str:
-        if "AUTO_FIX_CHROOT_NATIVE_PMOS_BEGONIA" in text:
-            return text
-
-        marker = "def create_and_mount_image"
-        if marker not in text:
-            return text
-
-        # Inserta utilidades mínimas dentro del archivo sin romper si cambia upstream.
-        injection = '''
-# AUTO_FIX_CHROOT_NATIVE_PMOS_BEGONIA
-def _ensure_native_chroot_exists(args):
-    import os
-    work = getattr(args, "work", None)
-    if not work:
-        return
-    chroot_native = os.path.join(work, "chroot_native")
-    if not os.path.isdir(chroot_native):
-        import pmb.build.init
-        pmb.build.init.init(args)
-'''
-        text = injection + "\n" + text
-
-        # Antes de crear/montar imagen, intenta asegurar chroot.
-        text = text.replace(
-            "def create_and_mount_image",
-            "def create_and_mount_image"
+# 3) blockdevice.py: re-init chroot_native if deleted (simple, proven approach)
+bd = ROOT / "install" / "blockdevice.py"
+if bd.exists():
+    with open(bd) as f:
+        c = f.read()
+    
+    # Add pmb.chroot import if not present  
+    c = c.replace('import pmb.helpers.mount',
+                  'import pmb.chroot\nimport pmb.helpers.mount')
+    
+    # Re-init native chroot before mkdir (from earlier working patch)
+    old = re.compile(r'^(\s+)# Create empty image files\s*\n\s+pmb\.chroot\.user\(\["mkdir",\s*"-p",\s*"/home/pmos/rootfs"\]\)',
+                     re.MULTILINE)
+    
+    def replacer_blockdev(m):
+        ws = m.group(1)
+        body_ws = ws + '    '
+        return (
+            f'{ws}# Re-init native chroot if pmbootstrap deleted it\n'
+            f'{ws}if not Chroot.native().exists():\n'
+            f'{body_ws}pmb.chroot.init(Chroot.native())\n'
+            f'\n'
+            f'{ws}# Create empty image files\n'
+            f'{ws}pmb.chroot.user(["mkdir", "-p", "/home/pmos/rootfs"])'
         )
-
-        # Inserción conservadora después de la primera línea def create_and_mount_image(...):
-        lines = text.splitlines()
-        out = []
-        inserted = False
-        inside_target_def = False
-
-        for line in lines:
-            out.append(line)
-            if line.startswith("def create_and_mount_image"):
-                inside_target_def = True
-                continue
-            if inside_target_def and not inserted and line.strip().startswith('"""'):
-                # No insertar dentro del docstring todavía
-                continue
-            if inside_target_def and not inserted and line.startswith(" ") and not line.strip().startswith('"""'):
-                out.append("    _ensure_native_chroot_exists(args)")
-                inserted = True
-                inside_target_def = False
-
-        return "\n".join(out) + "\n"
-
-    patch_file(blockdevice_py, patch_blockdevice, "defensive chroot_native re-init")
+    
+    new_c = old.sub(replacer_blockdev, c)
+    if new_c != c:
+        with open(bd, 'w') as f:
+            f.write(new_c)
+        print(f"✓ Patched {bd}: chroot_native re-init before mkdir")
+    else:
+        print(f"- No change {bd}: already patched or structure changed")
 
 print("=== grep losetup after patch ===")
 for path in ROOT.rglob("*.py"):
