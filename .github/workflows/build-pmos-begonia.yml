@@ -163,10 +163,13 @@ jobs:
           UI="${{ github.event.inputs.ui }}"
           EXTRA="${{ github.event.inputs.extra_space }}"
 
+          # CRITICAL: Clean work folder to avoid migration errors between runs
+          rm -rf "$PMB_WORK"
+
           mkdir -p "$HOME/.config"
           mkdir -p "$PMB_WORK/cache_git"
 
-          # pmbootstrap en tu log buscó exactamente aquí:
+          # pmbootstrap a veces busca pmaports aquí:
           ln -sfn "$PMAPORTS_DIR" "$PMB_WORK/cache_git/pmaports"
 
           cat > "$PMB_CONFIG" <<EOF
@@ -254,14 +257,14 @@ jobs:
         run: |
           set -eux
 
-          echo "=== Validando que haya im\u0301genes reales ==="
+          echo "=== Validando que haya imágenes reales ==="
           find artifacts/export -type f -printf "%p %s bytes\n" | sort
 
           COUNT=$(find artifacts/export -type f \( -name "*.img" -o -name "*boot*" -o -name "*rootfs*" -o -name "*.zip" \) | wc -l)
           echo "image-like-files=$COUNT"
 
           if [ "$COUNT" -lt 1 ]; then
-            echo "ERROR: No se exportaron im\u0301genes. Revisar logs."
+            echo "ERROR: No se exportaron imágenes. Revisar logs."
             exit 1
           fi
 
