@@ -151,16 +151,28 @@ jobs:
           pmbootstrap "${PMB_FLAGS[@]}" chroot -- sh -lc '
             set -eux
             echo "PATH=$PATH"
-            which losetup || true
-            ls -la /sbin/losetup /bin/losetup /usr/sbin/losetup /usr/bin/losetup 2>/dev/null || true
-            losetup --help | head -40 || true
+            echo "Available losetup binaries:"
+            ls -la /usr/sbin/losetup /sbin/losetup /usr/bin/losetup /bin/losetup 2>/dev/null || true
 
-            if losetup --json --list >/dev/null 2>&1; then
-              echo "OK: native chroot losetup supports --json"
-            else
-              echo "ERROR: native chroot losetup still does not support --json"
-              exit 1
+            echo "Testing /usr/sbin/losetup:"
+            /usr/sbin/losetup --help | head -40
+            /usr/sbin/losetup --json --list >/dev/null
+
+            echo "Testing default losetup:"
+            command -v losetup || true
+            losetup --help | head -10 || true
+
+            echo "Force /sbin/losetup symlink to util-linux version if possible"
+            if [ -x /usr/sbin/losetup ]; then
+              rm -f /sbin/losetup /bin/losetup 2>/dev/null || true
+              ln -sf /usr/sbin/losetup /sbin/losetup
+              ln -sf /usr/sbin/losetup /bin/losetup
             fi
+
+            echo "Final test:"
+            /sbin/losetup --json --list >/dev/null
+            /usr/sbin/losetup --json --list >/dev/null
+            echo "OK: util-linux losetup is active"
           '
 
           echo "=== Check chroot_native ==="
@@ -169,11 +181,31 @@ jobs:
             pmbootstrap "${PMB_FLAGS[@]}" shutdown || true
             pmbootstrap "${PMB_FLAGS[@]}" build_init
             pmbootstrap "${PMB_FLAGS[@]}" chroot -- apk add --upgrade losetup util-linux
+            pmbootstrap "${PMB_FLAGS[@]}" chroot -- sh -lc '
+              if [ -x /usr/sbin/losetup ]; then
+                rm -f /sbin/losetup /bin/losetup 2>/dev/null || true
+                ln -sf /usr/sbin/losetup /sbin/losetup
+                ln -sf /usr/sbin/losetup /bin/losetup
+              fi
+            '
           fi
 
           echo "=== Native chroot listing ==="
           ls -la "$PMB_WORK" || true
           ls -la "$PMB_WORK/chroot_native" || true
+
+          echo "=== Re-force losetup symlinks immediately before install ==="
+          pmbootstrap "${PMB_FLAGS[@]}" chroot -- apk add --upgrade losetup util-linux || true
+          pmbootstrap "${PMB_FLAGS[@]}" chroot -- sh -lc '
+            set -eux
+            if [ -x /usr/sbin/losetup ]; then
+              rm -f /sbin/losetup /bin/losetup 2>/dev/null || true
+              ln -sf /usr/sbin/losetup /sbin/losetup
+              ln -sf /usr/sbin/losetup /bin/losetup
+            fi
+            /sbin/losetup --json --list >/dev/null
+            /usr/sbin/losetup --json --list >/dev/null
+          '
 
           echo "=== Start pmbootstrap install ==="
           if [ "$FDE" = "true" ]; then
