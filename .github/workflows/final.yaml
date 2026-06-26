@@ -112,6 +112,9 @@ jobs:
           echo "8" > $PMB_WORK/version
           ln -sfn $PMAPORTS_DIR $PMB_WORK/cache_git/pmaports
 
+      - name: Patch pmbootstrap (chroot_native re-init)
+        run: python3 .github/scripts/patch_blockdevice.py
+
       - name: Build postmarketOS image
         run: |
           set -euxo pipefail
@@ -134,21 +137,6 @@ jobs:
             PMB_FLAGS+=(--no-cross)
           fi
 
-          echo "=== Ensure native chroot exists ==="
-          pmbootstrap "${PMB_FLAGS[@]}" build_init || true
-
-          echo "=== Check chroot_native ==="
-          if [ ! -d "$PMB_WORK/chroot_native" ]; then
-            echo "chroot_native missing after build_init, retrying once..."
-            pmbootstrap "${PMB_FLAGS[@]}" shutdown || true
-            pmbootstrap "${PMB_FLAGS[@]}" build_init
-          fi
-
-          echo "=== Native chroot listing ==="
-          ls -la "$PMB_WORK" || true
-          ls -la "$PMB_WORK/chroot_native" || true
-
-          echo "=== Start pmbootstrap install ==="
           if [ "$FDE" = "true" ]; then
             printf '147147\n147147\n' | pmbootstrap "${PMB_FLAGS[@]}" install --fde
           else
