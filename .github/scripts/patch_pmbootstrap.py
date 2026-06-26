@@ -52,17 +52,21 @@ with open(lp, 'w') as f:
     f.write(c)
 print("✓ Patched losetup.py: /sbin/losetup in chroot calls (Alpine util-linux)")
 
-# --- Fix 3: config/__init__.py - add "losetup" package explicitly to install_native_packages ---
+# --- Fix 3: config/__init__.py - add "losetup" package to install_native_packages ---
 cp = os.path.join(pmb_root, 'pmb', 'config', '__init__.py')
 with open(cp) as f:
     c = f.read()
 
-# Add "losetup" package after "util-linux" in install_native_packages
-if '"losetup"' not in c:
-    c = c.replace('"util-linux", "parted"',
-                  '"util-linux", "losetup", "parted"')
+# Match the literal install_native_packages list (contains "util-linux", "parted") 
+# NOT "losetup": "" in the binary check dict above.
+old_line = 'install_native_packages = ["cryptsetup", "util-linux", "parted"]'
+new_line = 'install_native_packages = ["cryptsetup", "util-linux", "losetup", "parted"]'
+if old_line in c:
+    c = c.replace(old_line, new_line)
     with open(cp, 'w') as f:
         f.write(c)
-    print("✓ Patched config/__init__.py: losetup package added to install_native_packages")
+    print("✓ Patched config/__init__.py: losetup in install_native_packages")
+elif new_line in c:
+    print("  (install_native_packages already has losetup ✓)")
 else:
-    print("  (config/__init__.py already has losetup in install_native_packages ✓)")
+    print("  ⚠ Could not find install_native_packages line in config/__init__.py")
