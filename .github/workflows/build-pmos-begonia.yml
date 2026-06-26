@@ -167,11 +167,8 @@ jobs:
           rm -rf "$PMB_WORK"
 
           mkdir -p "$HOME/.config"
-          mkdir -p "$PMB_WORK/cache_git"
 
-          # pmbootstrap a veces busca pmaports aquí:
-          ln -sfn "$PMAPORTS_DIR" "$PMB_WORK/cache_git/pmaports"
-
+          # Write config FIRST, then let pmbootstrap create the work folder
           cat > "$PMB_CONFIG" <<EOF
           [pmbootstrap]
           aports = $PMAPORTS_DIR
@@ -198,6 +195,13 @@ jobs:
 
           echo "=== pmbootstrap config ==="
           cat "$PMB_CONFIG"
+
+          # Create work folder with version marker so pmbootstrap doesn't choke
+          mkdir -p "$PMB_WORK/cache_git"
+          echo "8" > "$PMB_WORK/version"
+
+          # Symlink so pmbootstrap finds pmaports there
+          ln -sfn "$PMAPORTS_DIR" "$PMB_WORK/cache_git/pmaports"
 
           echo "=== pmbootstrap status ==="
           pmbootstrap \
