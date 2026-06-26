@@ -112,8 +112,8 @@ jobs:
           echo "8" > $PMB_WORK/version
           ln -sfn $PMAPORTS_DIR $PMB_WORK/cache_git/pmaports
 
-      - name: Patch pmbootstrap (chroot_native re-init)
-        run: python3 .github/scripts/patch_blockdevice.py
+      - name: Patch pmbootstrap (CI fixes)
+        run: python3 .github/scripts/patch_pmbootstrap.py
 
       - name: Build postmarketOS image
         run: |
