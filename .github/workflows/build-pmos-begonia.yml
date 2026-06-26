@@ -191,36 +191,41 @@ jobs:
             -c "$PMB_CONFIG" \
             -p "$PMAPORTS" \
             -w "$PMB_WORK" \
+            -t 3600 \
+            --details-to-stdout \
             export
 
           mkdir -p artifacts
           cp -av /tmp/postmarketOS-export/* artifacts/ || true
 
-          echo "=== Artifacts ==="
+          echo "=== Exported artifacts ==="
           find artifacts -maxdepth 2 -type f -printf "%p %s bytes\n" | sort
 
       - name: Generate checksums
+        if: always()
         run: |
-          set -eux
-          cd artifacts
-          sha256sum * > SHA256SUMS.txt || true
-          cd ..
+          set +e
+          mkdir -p artifacts
+          cd artifacts || exit 0
+          sha256sum * > SHA256SUMS.txt 2>/dev/null || true
 
-      - name: Save pmbootstrap logs
+      - name: Save debug logs
         if: always()
         run: |
           set +e
           mkdir -p artifacts/logs
+
+          cp -av "$PMB_CONFIG" artifacts/logs/pmbootstrap_v3.cfg 2>/dev/null || true
           cp -av "$PMB_WORK/log.txt" artifacts/logs/pmbootstrap-log.txt 2>/dev/null || true
-          cp -av "$PMB_CONFIG" artifacts/logs/ 2>/dev/null || true
-          cp -av "$PMB_WORK/cache_git/pmaports" artifacts/logs/pmaports-symlink 2>/dev/null || true
+
           pmbootstrap \
             -c "$PMB_CONFIG" \
             -p "$PMAPORTS" \
             -w "$PMB_WORK" \
             status > artifacts/logs/pmbootstrap-status.txt 2>&1 || true
+
           df -h > artifacts/logs/df-h.txt 2>&1 || true
-          find "$PMB_WORK" -maxdepth 3 -type f -name "*.log" -exec cp -av {} artifacts/logs/ \; 2>/dev/null || true
+          find "$PMB_WORK" -maxdepth 4 -type f -name "*.log" -exec cp -av {} artifacts/logs/ \; 2>/dev/null || true
 
       - name: Upload postmarketOS artifacts
         uses: actions/upload-artifact@v4
