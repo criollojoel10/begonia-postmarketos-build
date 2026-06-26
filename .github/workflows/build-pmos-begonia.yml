@@ -25,6 +25,14 @@ on:
         description: "Espacio extra en MB para la imagen rootfs"
         required: true
         default: "2048"
+      cross:
+        description: "Usar cross-compilación"
+        required: true
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
       pmaports_branch:
         description: "Rama pmaports"
         required: true
@@ -64,37 +72,7 @@ jobs:
         run: |
           set -eux
           sudo apt-get update
-          sudo apt-get install -y \
-            git \
-            python3 \
-            python3-pip \
-            python3-venv \
-            python3-setuptools \
-            python3-wheel \
-            build-essential \
-            bison \
-            flex \
-            bc \
-            cpio \
-            zip \
-            unzip \
-            xz-utils \
-            zstd \
-            kmod \
-            file \
-            rsync \
-            android-sdk-platform-tools \
-            qemu-user-static \
-            binfmt-support \
-            ca-certificates \
-            openssl \
-            kpartx \
-            util-linux \
-            parted \
-            e2fsprogs \
-            dosfstools \
-            findutils \
-            coreutils
+          sudo apt-get install -y             git             python3             python3-pip             python3-venv             python3-setuptools             python3-wheel             build-essential             bison             flex             bc             cpio             zip             unzip             xz-utils             zstd             kmod             file             rsync             android-sdk-platform-tools             qemu-user-static             binfmt-support             ca-certificates             openssl             kpartx             util-linux             parted             e2fsprogs             dosfstools             findutils             coreutils
 
       - name: Clone pmbootstrap
         run: |
@@ -153,8 +131,7 @@ jobs:
           done < artifacts/preflight/begonia-files.txt
 
           echo "=== Grep device/package names ==="
-          grep -rE "device-xiaomi-begonia|linux-postmarketos-mediatek-mt6785|firmware-xiaomi-begonia" "$PMAPORTS_DIR" \
-            > artifacts/preflight/grep-begonia.txt 2>&1 || true
+          grep -rE "device-xiaomi-begonia|linux-postmarketos-mediatek-mt6785|firmware-xiaomi-begonia" "$PMAPORTS_DIR"             > artifacts/preflight/grep-begonia.txt 2>&1 || true
 
       - name: Prepare pmbootstrap config
         run: |
@@ -162,13 +139,20 @@ jobs:
 
           UI="${{ github.event.inputs.ui }}"
           EXTRA="${{ github.event.inputs.extra_space }}"
+          CROSS_INPUT="${{ github.event.inputs.cross }}"
+
+          # Normalizar cross a Python bool
+          if [ "$CROSS_INPUT" = "true" ]; then
+            CROSS_CFG="True"
+          else
+            CROSS_CFG="False"
+          fi
 
           # CRITICAL: Clean work folder to avoid migration errors between runs
           rm -rf "$PMB_WORK"
 
           mkdir -p "$HOME/.config"
 
-          # Write config FIRST, then let pmbootstrap create the work folder
           cat > "$PMB_CONFIG" <<EOF
           [pmbootstrap]
           aports = $PMAPORTS_DIR
@@ -185,7 +169,7 @@ jobs:
           [providers]
 
           [build_options]
-          cross = True
+          cross = $CROSS_CFG
           EOF
 
           sed -i 's/^          //' "$PMB_CONFIG"
@@ -204,13 +188,7 @@ jobs:
           ln -sfn "$PMAPORTS_DIR" "$PMB_WORK/cache_git/pmaports"
 
           echo "=== pmbootstrap status ==="
-          pmbootstrap \
-            -c "$PMB_CONFIG" \
-            -p "$PMAPORTS_DIR" \
-            -w "$PMB_WORK" \
-            -t 3600 \
-            --details-to-stdout \
-            status || true
+          pmbootstrap             -c "$PMB_CONFIG"             -p "$PMAPORTS_DIR"             -w "$PMB_WORK"             -t 3600             --details-to-stdout             status || true
 
       - name: Build postmarketOS image
         run: |
@@ -218,51 +196,48 @@ jobs:
 
           EXTRA="${{ github.event.inputs.extra_space }}"
           FDE="${{ github.event.inputs.fde }}"
+          CROSS="${{ github.event.inputs.cross }}"
+
+          PMB_FLAGS=(
+            -c "$PMB_CONFIG"
+            -p "$PMAPORTS_DIR"
+            -w "$PMB_WORK"
+            -E "$EXTRA"
+            -t 3600
+            -j 2
+            --details-to-stdout
+          )
+
+          if [ "$CROSS" = "false" ]; then
+            PMB_FLAGS+=(--no-cross)
+          fi
 
           if [ "$FDE" = "true" ]; then
-            printf '147147\n147147\n' | pmbootstrap \
-              -c "$PMB_CONFIG" \
-              -p "$PMAPORTS_DIR" \
-              -w "$PMB_WORK" \
-              -E "$EXTRA" \
-              -t 3600 \
-              --details-to-stdout \
-              install --fde
+            pmbootstrap "${PMB_FLAGS[@]}" install --fde
           else
-            printf '147147\n147147\n' | pmbootstrap \
-              -c "$PMB_CONFIG" \
-              -p "$PMAPORTS_DIR" \
-              -w "$PMB_WORK" \
-              -E "$EXTRA" \
-              -t 3600 \
-              --details-to-stdout \
-              install
+            pmbootstrap "${PMB_FLAGS[@]}" install
           fi
 
       - name: Export images
         run: |
           set -eux
 
-          pmbootstrap \
-            -c "$PMB_CONFIG" \
-            -p "$PMAPORTS_DIR" \
-            -w "$PMB_WORK" \
-            -t 3600 \
-            --details-to-stdout \
-            export
+          pmbootstrap             -c "$PMB_CONFIG"             -p "$PMAPORTS_DIR"             -w "$PMB_WORK"             -t 3600             --details-to-stdout             export
 
           mkdir -p artifacts/export
           cp -av /tmp/postmarketOS-export/* artifacts/export/ || true
 
           echo "=== Exported artifacts ==="
-          find artifacts/export -maxdepth 2 -type f -printf "%p %s bytes\n" | sort | tee artifacts/export/exported-files.txt
+          find artifacts/export -maxdepth 2 -type f -printf "%p %s bytes
+" | sort | tee artifacts/export/exported-files.txt
 
       - name: Validate exported images
         run: |
           set -eux
 
           echo "=== Validando que haya imágenes reales ==="
-          find artifacts/export -type f -printf "%p %s bytes\n" | sort
+          find artifacts/export -type f -printf "%p %s bytes
+" | sort
 
           COUNT=$(find artifacts/export -type f \( -name "*.img" -o -name "*boot*" -o -name "*rootfs*" -o -name "*.zip" \) | wc -l)
           echo "image-like-files=$COUNT"
@@ -288,11 +263,7 @@ jobs:
           cp -av "$PMB_CONFIG" artifacts/logs/pmbootstrap_v3.cfg 2>/dev/null || true
           cp -av "$PMB_WORK/log.txt" artifacts/logs/pmbootstrap-log.txt 2>/dev/null || true
 
-          pmbootstrap \
-            -c "$PMB_CONFIG" \
-            -p "$PMAPORTS_DIR" \
-            -w "$PMB_WORK" \
-            status > artifacts/logs/pmbootstrap-status.txt 2>&1 || true
+          pmbootstrap             -c "$PMB_CONFIG"             -p "$PMAPORTS_DIR"             -w "$PMB_WORK"             status > artifacts/logs/pmbootstrap-status.txt 2>&1 || true
 
           df -h > artifacts/logs/df-h.txt 2>&1 || true
           mount > artifacts/logs/mount.txt 2>&1 || true
@@ -304,6 +275,6 @@ jobs:
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: postmarketos-xiaomi-begonia-${{ github.event.inputs.ui }}-fde-${{ github.event.inputs.fde }}
+          name: postmarketos-xiaomi-begonia-${{ github.event.inputs.ui }}-fde-${{ github.event.inputs.cross }}
           path: artifacts/
           retention-days: 14
