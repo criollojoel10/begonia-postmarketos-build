@@ -48,39 +48,41 @@ if losetup_py.exists():
 
     patch_file(losetup_py, force_usr_sbin_losetup, "force /usr/sbin/losetup")
 
-    # 2a) Also auto-install losetup in mount() before use (survives chroot recreation)
+    # 2a) Also auto-install partition tools in mount() (survives chroot recreation)
+    # When pmbootstrap install recreates the native chroot during package builds,
+    # tools like losetup (util-linux), parted, partx get wiped.
     def inject_apk_install(text: str) -> str:
-        """Add apk add --upgrade losetup before mount() uses losetup"""
+        """Add apk add --upgrade losetup parted util-linux before mount() uses them"""
         target = 'logging.debug(f"(native) mount {img_path} (loop)")'
         if target not in text:
             return text
         if "apk add --upgrade losetup" in text:
             return text
         insert = (
-            '    # Force install util-linux losetup (chroot may be recreated)\n'
-            '    pmb.chroot.root(["apk", "add", "--upgrade", "losetup", "util-linux"], check=False)\n'
+            '    # Ensure partition tools survive chroot recreation\n'
+            '    pmb.chroot.root(["apk", "add", "--upgrade", "losetup", "parted", "util-linux"], check=False)\n'
         )
         text = text.replace(target + '\n', target + '\n' + insert)
         return text
 
-    patch_file(losetup_py, inject_apk_install, "auto-install losetup in mount() before use")
+    patch_file(losetup_py, inject_apk_install, "auto-install partition tools in mount()")
 
-    # 2b) Also install losetup in device_by_back_file() as safety net
+    # 2b) Also install partition tools in device_by_back_file() as safety net
     def inject_apk_install_device(text: str) -> str:
-        """Ensure losetup is installed in device_by_back_file too"""
+        """Ensure partition tools are installed in device_by_back_file too"""
         target = 'def device_by_back_file(back_file: Path) -> Path:'
         if target not in text:
             return text
         if "apk add --upgrade losetup" in text:
             return text
         insert = (
-            '    # Ensure losetup from util-linux is installed\n'
-            '    pmb.chroot.root(["apk", "add", "--upgrade", "losetup", "util-linux"], check=False)\n'
+            '    # Ensure partition tools survive chroot recreation\n'
+            '    pmb.chroot.root(["apk", "add", "--upgrade", "losetup", "parted", "util-linux"], check=False)\n'
         )
         text = text.replace(target + '\n', target + '\n' + insert)
         return text
 
-    patch_file(losetup_py, inject_apk_install_device, "auto-install losetup in device_by_back_file()")
+    patch_file(losetup_py, inject_apk_install_device, "auto-install partition tools in device_by_back_file()")
 
 # 3) blockdevice.py: re-init chroot_native if deleted (survives chroot recreation)
 bd = ROOT / "install" / "blockdevice.py"
@@ -116,11 +118,30 @@ if bd.exists():
     else:
         print(f"- No change {bd}: already patched or structure changed")
 
-print("=== grep losetup after patch ===")
+# 4) partition.py: ensure parted is installed before partition operations
+part_py = ROOT / "install" / "partition.py"
+if part_py.exists():
+    def ensure_partition_tools(text: str) -> str:
+        """Install parted and partx before partition operations"""
+        target = 'def partition(layout: PartitionLayout, size_boot: int) -> None:'
+        if target not in text:
+            return text
+        if "apk add --upgrade parted" in text:
+            return text
+        insert = (
+            '    # Ensure parted and friends are installed (chroot may be recreated)\n'
+            '    pmb.chroot.root(["apk", "add", "--upgrade", "losetup", "parted", "util-linux"], check=False)\n'
+        )
+        text = text.replace(target + '\n', target + '\n' + insert)
+        return text
+
+    patch_file(part_py, ensure_partition_tools, "ensure parted in partition() before use")
+
+print("=== grep losetup/parted after patch ===")
 for path in ROOT.rglob("*.py"):
     txt = path.read_text(errors="ignore")
-    if "losetup" in txt or "/sbin/losetup" in txt or "/usr/sbin/losetup" in txt:
+    if "losetup" in txt or "/sbin/losetup" in txt or "/usr/sbin/losetup" in txt or "apk add" in txt:
         print(path)
         for i, line in enumerate(txt.splitlines(), start=1):
-            if "losetup" in line:
+            if "losetup" in line or "apk add" in line:
                 print(f"  {i}: {line}")
