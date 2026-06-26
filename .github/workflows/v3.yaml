@@ -1,0 +1,56 @@
+name: Build pmOS begonia
+
+on:
+  workflow_dispatch:
+    inputs:
+      ui:
+        description: UI
+        required: true
+        default: console
+        type: choice
+        options:
+          - console
+          - phosh
+      fde:
+        description: FDE
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      extra:
+        description: Extra MB
+        required: true
+        default: "1024"
+      cross:
+        description: Cross
+        required: true
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+      branch:
+        description: Branch
+        required: true
+        default: main
+        type: choice
+        options:
+          - main
+          - master
+
+jobs:
+  b:
+    runs-on: ubuntu-latest
+    env:
+      W: /home/runner/.local/var/pmbootstrap
+      C: /home/runner/.config/pmbootstrap_v3.cfg
+      P: /home/runner/work/begonia-postmarketos-build/begonia-postmarketos-build/pmaports
+    steps:
+      - uses: actions/checkout@v4
+      - run: apt-get update -qq
+      - run: git clone --depth=1 https://gitlab.postmarketos.org/postmarketOS/pmbootstrap.git
+      - run: |
+          if git clone --depth=1 --branch=${{ github.event.inputs.branch }} https://gitlab.postmarketos.org/postmarketOS/pmaports.git $P; then echo ok; else echo fail; fi
+      - run: echo hi
