@@ -25,12 +25,13 @@ on:
         description: "Espacio extra en MB para la imagen rootfs"
         required: true
         default: "2048"
-      branch:
-        description: "Branch de postmarketOS/pmaports"
+      pmaports_branch:
+        description: "Rama pmaports"
         required: true
-        default: "master"
+        default: "main"
         type: choice
         options:
+          - main
           - master
 
 jobs:
@@ -42,7 +43,7 @@ jobs:
     env:
       PMB_WORK: /home/runner/.local/var/pmbootstrap
       PMB_CONFIG: /home/runner/.config/pmbootstrap_v3.cfg
-      PMAPORTS: /home/runner/work/begonia-postmarketos-build/begonia-postmarketos-build/pmaports
+      PMAPORTS_DIR: /home/runner/work/begonia-postmarketos-build/begonia-postmarketos-build/pmaports
 
     steps:
       - name: Checkout repo
@@ -91,26 +92,69 @@ jobs:
             util-linux \
             parted \
             e2fsprogs \
-            dosfstools
+            dosfstools \
+            findutils \
+            coreutils
 
       - name: Clone pmbootstrap
         run: |
           set -eux
-          git clone --depth=1 "https://gitlab.postmarketos.org/postmarketOS/pmbootstrap.git"
+          git clone --depth=1 https://gitlab.postmarketos.org/postmarketOS/pmbootstrap.git
           mkdir -p "$HOME/.local/bin"
           ln -sf "$PWD/pmbootstrap/pmbootstrap.py" "$HOME/.local/bin/pmbootstrap"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      - name: Clone pmaports
+      - name: Clone pmaports with fallback
         run: |
           set -eux
-          # Clonamos master (edge channel)
-          git clone --depth=1 --branch="${{ github.event.inputs.branch }}" \
-            "https://gitlab.postmarketos.org/postmarketOS/pmaports.git" \
-            "$PMAPORTS"
-          # pmbootstrap necesita origin/main para channels.cfg
-          # Creamos el ref remoto apuntando al mismo commit
-          git -C "$PMAPORTS" update-ref refs/remotes/origin/main origin/master
+
+          BRANCH="${{ github.event.inputs.pmaports_branch }}"
+
+          if git clone --depth=1 --branch="$BRANCH" https://gitlab.postmarketos.org/postmarketOS/pmaports.git "$PMAPORTS_DIR"; then
+            echo "Cloned pmaports branch: $BRANCH"
+          else
+            echo "Primary branch failed, trying fallback branches..."
+            rm -rf "$PMAPORTS_DIR"
+
+            if [ "$BRANCH" = "main" ]; then
+              FALLBACK="master"
+            else
+              FALLBACK="main"
+            fi
+
+            git clone --depth=1 --branch="$FALLBACK" https://gitlab.postmarketos.org/postmarketOS/pmaports.git "$PMAPORTS_DIR"
+            echo "Cloned fallback pmaports branch: $FALLBACK"
+          fi
+
+          git -C "$PMAPORTS_DIR" log -1 --oneline
+          git -C "$PMAPORTS_DIR" branch --show-current || true
+
+          # pmbootstrap needs origin/main ref for channels.cfg
+          git -C "$PMAPORTS_DIR" update-ref refs/remotes/origin/main HEAD
+
+      - name: Inspect begonia port before build
+        run: |
+          set -eux
+          mkdir -p artifacts/preflight
+
+          echo "=== Buscar device-xiaomi-begonia ==="
+          find "$PMAPORTS_DIR/device" -maxdepth 4 -iname "*begonia*" -print | tee artifacts/preflight/begonia-files.txt
+
+          echo "=== Buscar linux-postmarketos-mediatek-mt6785 ==="
+          find "$PMAPORTS_DIR/device" "$PMAPORTS_DIR/main" -maxdepth 6 -iname "*mt6785*" -print | tee artifacts/preflight/mt6785-files.txt || true
+
+          echo "=== Copiar archivos relevantes si existen ==="
+          while read -r path; do
+            if [ -f "$path" ]; then
+              REL="${path#$PMAPORTS_DIR/}"
+              mkdir -p "artifacts/preflight/$(dirname "$REL")"
+              cp -av "$path" "artifacts/preflight/$REL" || true
+            fi
+          done < artifacts/preflight/begonia-files.txt
+
+          echo "=== Grep device/package names ==="
+          grep -rE "device-xiaomi-begonia|linux-postmarketos-mediatek-mt6785|firmware-xiaomi-begonia" "$PMAPORTS_DIR" \
+            > artifacts/preflight/grep-begonia.txt 2>&1 || true
 
       - name: Prepare pmbootstrap config
         run: |
@@ -122,12 +166,12 @@ jobs:
           mkdir -p "$HOME/.config"
           mkdir -p "$PMB_WORK/cache_git"
 
-          # pmbootstrap a veces busca pmaports aquí:
-          ln -sfn "$PMAPORTS" "$PMB_WORK/cache_git/pmaports"
+          # pmbootstrap en tu log buscó exactamente aquí:
+          ln -sfn "$PMAPORTS_DIR" "$PMB_WORK/cache_git/pmaports"
 
-          cat > "$PMB_CONFIG" << EOF
+          cat > "$PMB_CONFIG" <<EOF
           [pmbootstrap]
-          aports = $PMAPORTS
+          aports = $PMAPORTS_DIR
           work = $PMB_WORK
           device = xiaomi-begonia
           ui = $UI
@@ -144,21 +188,21 @@ jobs:
           cross = True
           EOF
 
-          # Limpiar espacios iniciales generados por YAML heredoc
-          sed -i 's/^  //' "$PMB_CONFIG"
-
-          echo "=== pmbootstrap config ==="
-          cat "$PMB_CONFIG"
+          sed -i 's/^          //' "$PMB_CONFIG"
 
           echo "=== pmbootstrap version ==="
           pmbootstrap --version
 
+          echo "=== pmbootstrap config ==="
+          cat "$PMB_CONFIG"
+
           echo "=== pmbootstrap status ==="
           pmbootstrap \
             -c "$PMB_CONFIG" \
-            -p "$PMAPORTS" \
+            -p "$PMAPORTS_DIR" \
             -w "$PMB_WORK" \
             -t 3600 \
+            --details-to-stdout \
             status || true
 
       - name: Build postmarketOS image
@@ -171,7 +215,7 @@ jobs:
           if [ "$FDE" = "true" ]; then
             pmbootstrap \
               -c "$PMB_CONFIG" \
-              -p "$PMAPORTS" \
+              -p "$PMAPORTS_DIR" \
               -w "$PMB_WORK" \
               -E "$EXTRA" \
               -t 3600 \
@@ -180,7 +224,7 @@ jobs:
           else
             pmbootstrap \
               -c "$PMB_CONFIG" \
-              -p "$PMAPORTS" \
+              -p "$PMAPORTS_DIR" \
               -w "$PMB_WORK" \
               -E "$EXTRA" \
               -t 3600 \
@@ -191,27 +235,42 @@ jobs:
       - name: Export images
         run: |
           set -eux
+
           pmbootstrap \
             -c "$PMB_CONFIG" \
-            -p "$PMAPORTS" \
+            -p "$PMAPORTS_DIR" \
             -w "$PMB_WORK" \
             -t 3600 \
             --details-to-stdout \
             export
 
-          mkdir -p artifacts
-          cp -av /tmp/postmarketOS-export/* artifacts/ || true
+          mkdir -p artifacts/export
+          cp -av /tmp/postmarketOS-export/* artifacts/export/ || true
 
           echo "=== Exported artifacts ==="
-          find artifacts -maxdepth 2 -type f -printf "%p %s bytes\n" | sort
+          find artifacts/export -maxdepth 2 -type f -printf "%p %s bytes\n" | sort | tee artifacts/export/exported-files.txt
+
+      - name: Validate exported images
+        run: |
+          set -eux
+
+          echo "=== Validando que haya im\u0301genes reales ==="
+          find artifacts/export -type f -printf "%p %s bytes\n" | sort
+
+          COUNT=$(find artifacts/export -type f \( -name "*.img" -o -name "*boot*" -o -name "*rootfs*" -o -name "*.zip" \) | wc -l)
+          echo "image-like-files=$COUNT"
+
+          if [ "$COUNT" -lt 1 ]; then
+            echo "ERROR: No se exportaron im\u0301genes. Revisar logs."
+            exit 1
+          fi
 
       - name: Generate checksums
         if: always()
         run: |
           set +e
           mkdir -p artifacts
-          cd artifacts || exit 0
-          sha256sum * > SHA256SUMS.txt 2>/dev/null || true
+          find artifacts -type f -not -name "SHA256SUMS.txt" -print0 | xargs -0 sha256sum > artifacts/SHA256SUMS.txt 2>/dev/null || true
 
       - name: Save debug logs
         if: always()
@@ -224,12 +283,15 @@ jobs:
 
           pmbootstrap \
             -c "$PMB_CONFIG" \
-            -p "$PMAPORTS" \
+            -p "$PMAPORTS_DIR" \
             -w "$PMB_WORK" \
             status > artifacts/logs/pmbootstrap-status.txt 2>&1 || true
 
           df -h > artifacts/logs/df-h.txt 2>&1 || true
-          find "$PMB_WORK" -maxdepth 4 -type f -name "*.log" -exec cp -av {} artifacts/logs/ \; 2>/dev/null || true
+          mount > artifacts/logs/mount.txt 2>&1 || true
+          env | sort > artifacts/logs/env.txt 2>&1 || true
+
+          find "$PMB_WORK" -maxdepth 5 -type f -name "*.log" -exec cp -av {} artifacts/logs/ \; 2>/dev/null || true
 
       - name: Upload postmarketOS artifacts
         uses: actions/upload-artifact@v4
