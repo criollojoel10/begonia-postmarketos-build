@@ -1,13 +1,189 @@
-name: Test Workflow
+name: Build pmOS begonia
+
 on:
   workflow_dispatch:
     inputs:
-      test:
-        description: Test
+      ui:
+        description: Interfaz
         required: true
-        default: hello
+        default: console
+        type: choice
+        options:
+          - console
+          - phosh
+          - weston
+          - plasma-mobile
+      fde:
+        description: Full Disk Encryption
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      extra_space:
+        description: Extra space MB
+        required: true
+        default: "1024"
+      cross:
+        description: Cross compilation
+        required: true
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+      pmaports_branch:
+        description: pmaports branch
+        required: true
+        default: main
+        type: choice
+        options:
+          - main
+          - master
+
 jobs:
-  test:
-    runs-on: ubuntu-latest
+  build:
+    name: Build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+
+    env:
+      PMB_WORK: /home/runner/.local/var/pmbootstrap
+      PMB_CONFIG: /home/runner/.config/pmbootstrap_v3.cfg
+      PMAPORTS_DIR: /home/runner/work/begonia-postmarketos-build/begonia-postmarketos-build/pmaports
+
     steps:
-      - run: echo hello
+      - uses: actions/checkout@v4
+
+      - name: Free disk
+        run: |
+          df -h
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache/CodeQL
+          docker system prune -af
+          df -h
+
+      - name: Dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git python3 python3-pip python3-venv python3-setuptools python3-wheel build-essential bison flex bc cpio zip unzip xz-utils zstd kmod file rsync android-sdk-platform-tools qemu-user-static binfmt-support ca-certificates openssl kpartx util-linux parted e2fsprogs dosfstools findutils coreutils
+
+      - name: Clone pmbootstrap
+        run: |
+          git clone --depth=1 https://gitlab.postmarketos.org/postmarketOS/pmbootstrap.git
+          mkdir -p $HOME/.local/bin
+          ln -sf $PWD/pmbootstrap/pmbootstrap.py $HOME/.local/bin/pmbootstrap
+          echo $HOME/.local/bin >> $GITHUB_PATH
+
+      - name: Clone pmaports
+        run: |
+          BRANCH="${{ github.event.inputs.pmaports_branch }}"
+          if git clone --depth=1 --branch=$BRANCH https://gitlab.postmarketos.org/postmarketOS/pmaports.git $PMAPORTS_DIR; then
+            echo "Cloned branch: $BRANCH"
+          else
+            rm -rf $PMAPORTS_DIR
+            git clone --depth=1 --branch=master https://gitlab.postmarketos.org/postmarketOS/pmaports.git $PMAPORTS_DIR
+            echo "Fallback: master"
+          fi
+          git -C $PMAPORTS_DIR log -1 --oneline
+          git -C $PMAPORTS_DIR update-ref refs/remotes/origin/main HEAD
+
+      - name: Inspect
+        run: |
+          mkdir -p artifacts/preflight
+          find $PMAPORTS_DIR/device -maxdepth 4 -iname "*begonia*" -print | tee artifacts/preflight/begonia-files.txt
+          grep -rE "device-xiaomi-begonia|linux-postmarketos-mediatek-mt6785|firmware-xiaomi-begonia" $PMAPORTS_DIR > artifacts/preflight/grep-begonia.txt 2>&1 || true
+
+      - name: Config
+        run: |
+          UI="${{ github.event.inputs.ui }}"
+          EXTRA="${{ github.event.inputs.extra_space }}"
+          CROSS_IN="${{ github.event.inputs.cross }}"
+          rm -rf $PMB_WORK
+          mkdir -p $HOME/.config
+          if [ "$CROSS_IN" = "true" ]; then CFG="True"; else CFG="False"; fi
+          cat > $PMB_CONFIG << CONFEOF
+          [pmbootstrap]
+          aports = $PMAPORTS_DIR
+          work = $PMB_WORK
+          device = xiaomi-begonia
+          ui = $UI
+          user = joel
+          extra_space = $EXTRA
+          ssh_keys = False
+          sudo_timer = False
+
+          [mirrors]
+
+          [providers]
+
+          [build_options]
+          cross = $CFG
+          CONFEOF
+          sed -i 's/^          //' $PMB_CONFIG
+          echo "=== config ==="
+          cat $PMB_CONFIG
+          echo "=== version ==="
+          pmbootstrap --version
+          mkdir -p $PMB_WORK/cache_git
+          echo "8" > $PMB_WORK/version
+          ln -sfn $PMAPORTS_DIR $PMB_WORK/cache_git/pmaports
+          pmbootstrap -c $PMB_CONFIG -p $PMAPORTS_DIR -w $PMB_WORK -t 3600 --details-to-stdout status || true
+
+      - name: Build
+        run: |
+          EXTRA="${{ github.event.inputs.extra_space }}"
+          FDE="${{ github.event.inputs.fde }}"
+          CROSS="${{ github.event.inputs.cross }}"
+          FLAGS="-c $PMB_CONFIG -p $PMAPORTS_DIR -w $PMB_WORK -E $EXTRA -t 3600 -j 2 --details-to-stdout"
+          if [ "$CROSS" = "false" ]; then
+            FLAGS="$FLAGS --no-cross"
+          fi
+          if [ "$FDE" = "true" ]; then
+            printf '147147
+147147
+' | pmbootstrap $FLAGS install --fde
+          else
+            printf '147147
+147147
+' | pmbootstrap $FLAGS install
+          fi
+
+      - name: Export
+        run: |
+          pmbootstrap -c $PMB_CONFIG -p $PMAPORTS_DIR -w $PMB_WORK -t 3600 --details-to-stdout export
+          mkdir -p artifacts/export
+          cp -av /tmp/postmarketOS-export/* artifacts/export/ || true
+          find artifacts/export -type f -printf "%p %s bytes
+" | sort | tee artifacts/export/exported-files.txt
+
+      - name: Validate
+        run: |
+          COUNT=$(find artifacts/export -type f -name "*.img" -o -name "*boot*" -o -name "*rootfs*" -o -name "*.zip" | wc -l)
+          echo "image-like-files=$COUNT"
+          if [ "$COUNT" -lt 1 ]; then
+            echo "ERROR: No images"
+            exit 1
+          fi
+
+      - name: Checksums
+        if: always()
+        run: |
+          find artifacts -type f -not -name "SHA256SUMS.txt" -print0 | xargs -0 sha256sum > artifacts/SHA256SUMS.txt 2>/dev/null || true
+
+      - name: Debug logs
+        if: always()
+        run: |
+          mkdir -p artifacts/logs
+          cp -av $PMB_CONFIG artifacts/logs/ 2>/dev/null || true
+          cp -av $PMB_WORK/log.txt artifacts/logs/pmbootstrap-log.txt 2>/dev/null || true
+          pmbootstrap -c $PMB_CONFIG -p $PMAPORTS_DIR -w $PMB_WORK status > artifacts/logs/pmbootstrap-status.txt 2>&1 || true
+          df -h > artifacts/logs/df-h.txt 2>&1 || true
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pmos-begonia-${{ github.event.inputs.ui }}-cross-${{ github.event.inputs.cross }}
+          path: artifacts/
+          retention-days: 14
