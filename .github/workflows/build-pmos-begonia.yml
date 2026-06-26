@@ -1,4 +1,5 @@
 name: Build postmarketOS for xiaomi-begonia
+# Workflow for building postmarketOS for xiaomi-begonia
 
 on:
   workflow_dispatch:
