@@ -118,6 +118,22 @@ jobs:
       - name: Enable USB Ethernet & WiFi dongle drivers
         run: bash .github/scripts/enable_kernel_drivers.sh
 
+      - name: Force rebuild kernel with new drivers
+        run: |
+          KERNEL_PKG="linux-postmarketos-mediatek-mt6785"
+
+          echo "=== Existing kernel packages in cache ==="
+          find "$PMB_WORK/packages" -name "${KERNEL_PKG}*.apk" 2>/dev/null | head -5
+
+          echo "=== Removing cached kernel packages ==="
+          find "$PMB_WORK/packages" -name "${KERNEL_PKG}*.apk" -delete 2>/dev/null || true
+
+          echo "=== Forcing kernel rebuild ==="
+          pmbootstrap -c "$PMB_CONFIG" -p "$PMAPORTS_DIR" -w "$PMB_WORK" -t 3600 -j 1 --details-to-stdout build "$KERNEL_PKG" --force 2>&1
+
+          echo "=== Newly built kernel packages ==="
+          find "$PMB_WORK/packages" -name "${KERNEL_PKG}*.apk" 2>/dev/null
+
       - name: Build postmarketOS image
         run: |
           set -euxo pipefail
