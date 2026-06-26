@@ -1,0 +1,92 @@
+name: Build pmOS begonia
+on:
+  workflow_dispatch:
+    inputs:
+      ui:
+        description: UI
+        required: true
+        default: console
+        type: choice
+        options:
+          - console
+          - phosh
+      fde:
+        description: FDE
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      extra_space:
+        description: Extra MB
+        required: true
+        default: "1024"
+      cross:
+        description: Cross
+        required: true
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+      branch:
+        description: Branch
+        required: true
+        default: main
+        type: choice
+        options:
+          - main
+          - master
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      W: /home/runner/.local/var/pmbootstrap
+      C: /home/runner/.config/pmbootstrap_v3.cfg
+      P: /home/runner/work/begonia-postmarketos-build/begonia-postmarketos-build/pmaports
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq git python3 python3-pip python3-venv build-essential bison flex bc cpio zip unzip xz-utils zstd kmod file rsync android-sdk-platform-tools qemu-user-static binfmt-support ca-certificates openssl kpartx util-linux parted e2fsprogs dosfstools
+      - run: git clone --depth=1 https://gitlab.postmarketos.org/postmarketOS/pmbootstrap.git && mkdir -p $HOME/.local/bin && ln -sf $PWD/pmbootstrap/pmbootstrap.py $HOME/.local/bin/pmbootstrap && echo $HOME/.local/bin >> $GITHUB_PATH
+      - name: pmaports
+        run: |
+          if git clone --depth=1 --branch=${{ github.event.inputs.branch }} https://gitlab.postmarketos.org/postmarketOS/pmaports.git $P; then echo cloned; else rm -rf $P && git clone --depth=1 --branch=master https://gitlab.postmarketos.org/postmarketOS/pmaports.git $P; fi
+          git -C $P update-ref refs/remotes/origin/main HEAD
+      - name: cfg
+        run: |
+          rm -rf $W && mkdir -p $HOME/.config
+          X=False; if [ "${{ github.event.inputs.cross }}" = true ]; then X=True; fi
+          printf '[pmbootstrap]
+aports = %s
+work = %s
+device = xiaomi-begonia
+ui = %s
+user = joel
+extra_space = %s
+ssh_keys = False
+sudo_timer = False
+
+[build_options]
+cross = %s
+' "$P" "$W" "${{ github.event.inputs.ui }}" "${{ github.event.inputs.extra_space }}" "$X" > $C
+          mkdir -p $W/cache_git && echo 8 > $W/version && ln -sfn $P $W/cache_git/pmaports
+          pmbootstrap -c $C -p $P -w $W -t 3600 --details-to-stdout status
+      - name: build
+        run: |
+          F="-c $C -p $P -w $W -E ${{ github.event.inputs.extra_space }} -t 3600 -j 2 --details-to-stdout"
+          [ "${{ github.event.inputs.cross }}" = false ] && F="$F --no-cross"
+          printf '147147\n147147\n' | pmbootstrap $F install
+      - name: export
+        run: |
+          pmbootstrap -c $C -p $P -w $W -t 3600 --details-to-stdout export
+          mkdir -p artifacts/export && cp -av /tmp/postmarketOS-export/* artifacts/export/ 2>/dev/null || true
+          find artifacts/export -type f -printf "%p %s bytes\n" | sort > artifacts/export/files.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pmos-${{ github.event.inputs.ui }}
+          path: artifacts/
+          retention-days: 14
