@@ -138,8 +138,7 @@ jobs:
           cp -av /tmp/postmarketOS-export/* artifacts/ || true
 
           echo "=== Artifacts ==="
-          find artifacts -maxdepth 2 -type f -printf "%p %s bytes
-" | sort
+          find artifacts -maxdepth 2 -type f -printf "%p %s bytes\n" | sort
 
       - name: Generate checksums
         run: |
