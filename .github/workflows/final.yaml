@@ -168,7 +168,7 @@ jobs:
           pmbootstrap "${PMB_FLAGS[@]}" chroot -- apk add --upgrade losetup util-linux || true
           pmbootstrap "${PMB_FLAGS[@]}" chroot -- sh -c '/usr/sbin/losetup --json --list >/dev/null && echo "OK" || exit 1'
 
-          echo "=== Start pmbootstrap install ===
+          echo "=== Start pmbootstrap install ==="
           if [ "$FDE" = "true" ]; then
             printf '147147\n147147\n' | pmbootstrap "${PMB_FLAGS[@]}" install --fde
           else
