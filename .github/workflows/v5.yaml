@@ -1,0 +1,76 @@
+name: Build pmOS begonia
+
+on:
+  workflow_dispatch:
+    inputs:
+      ui:
+        description: UI
+        required: true
+        default: console
+        type: choice
+        options:
+          - console
+          - phosh
+      fde:
+        description: FDE
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      extra:
+        description: Extra MB
+        required: true
+        default: "1024"
+      cross:
+        description: Cross
+        required: true
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+      branch:
+        description: Branch
+        required: true
+        default: main
+        type: choice
+        options:
+          - main
+          - master
+
+jobs:
+  b:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    env:
+      W: /home/runner/.local/var/pmbootstrap
+      C: /home/runner/.config/pmbootstrap_v3.cfg
+      P: /home/runner/work/begonia-postmarketos-build/begonia-postmarketos-build/pmaports
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          df -h
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache/CodeQL
+          docker system prune -af
+          df -h
+      - run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq git python3 python3-pip python3-venv build-essential bison flex bc cpio zip unzip xz-utils zstd kmod file rsync android-sdk-platform-tools qemu-user-static binfmt-support ca-certificates openssl kpartx util-linux parted e2fsprogs dosfstools findutils coreutils
+      - run: |
+          git clone --depth=1 https://gitlab.postmarketos.org/postmarketOS/pmbootstrap.git
+          mkdir -p $HOME/.local/bin
+          ln -sf $PWD/pmbootstrap/pmbootstrap.py $HOME/.local/bin/pmbootstrap
+          echo $HOME/.local/bin >> $GITHUB_PATH
+      - run: |
+          if git clone --depth=1 --branch=${{ github.event.inputs.branch }} https://gitlab.postmarketos.org/postmarketOS/pmaports.git $P; then
+            echo "Cloned branch: ${{ github.event.inputs.branch }}"
+          else
+            rm -rf $P
+            git clone --depth=1 --branch=master https://gitlab.postmarketos.org/postmarketOS/pmaports.git $P
+            echo "Fallback: master"
+          fi
+          git -C $P log -1 --oneline
+          git -C $P update-ref refs/remotes/origin/main HEAD
+      - run: echo "=== config ==="
