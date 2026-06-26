@@ -1,0 +1,44 @@
+name: Build pmOS begonia
+
+on:
+  workflow_dispatch:
+    inputs:
+      ui:
+        description: Interfaz
+        required: true
+        default: console
+        type: choice
+        options:
+          - console
+          - phosh
+      extra_space:
+        description: Extra space MB
+        required: true
+        default: "1024"
+      cross:
+        description: Cross compilation
+        required: true
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      PMB_WORK: /home/runner/.local/var/pmbootstrap
+    steps:
+      - run: echo hello
+      - name: Multi-line test
+        run: |
+          echo "line 1"
+          echo "line 2"
+          if [ "true" = "true" ]; then
+            echo "conditional"
+          fi
+          echo "done"
+      - name: Template expression
+        run: echo "${{ github.event.inputs.ui }}"
