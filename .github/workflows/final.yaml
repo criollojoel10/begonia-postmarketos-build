@@ -98,26 +98,61 @@ jobs:
         run: |
           rm -rf $PMB_WORK
           mkdir -p $HOME/.config
-          X=False
-          if [ "${{ github.event.inputs.cross }}" = "true" ]; then X=True; fi
-          printf '[pmbootstrap]\naports = %s\nwork = %s\ndevice = xiaomi-begonia\nui = %s\nuser = joel\nextra_space = %s\nssh_keys = False\nsudo_timer = False\n\n[build_options]\ncross = %s\n' "$PMAPORTS_DIR" "$PMB_WORK" "${{ github.event.inputs.ui }}" "${{ github.event.inputs.extra_space }}" "$X" > $PMB_CONFIG
+
+          CROSS_INPUT="${{ github.event.inputs.cross }}"
+          if [ "$CROSS_INPUT" = "true" ]; then
+            CROSS_CFG="True"
+          else
+            CROSS_CFG="False"
+          fi
+
+          printf '[pmbootstrap]\naports = %s\nwork = %s\ndevice = xiaomi-begonia\nui = %s\nuser = joel\nextra_space = %s\nssh_keys = False\nsudo_timer = False\n\n[build_options]\ncross = %s\n' \
+            "$PMAPORTS_DIR" "$PMB_WORK" "${{ github.event.inputs.ui }}" "${{ github.event.inputs.extra_space }}" "$CROSS_CFG" > "$PMB_CONFIG"
           mkdir -p $PMB_WORK/cache_git
           echo "8" > $PMB_WORK/version
           ln -sfn $PMAPORTS_DIR $PMB_WORK/cache_git/pmaports
-          pmbootstrap -c $PMB_CONFIG -p $PMAPORTS_DIR -w $PMB_WORK -t 3600 --details-to-stdout status || true
 
-      - name: Build
+      - name: Build postmarketOS image
         run: |
+          set -euxo pipefail
+
+          EXTRA="${{ github.event.inputs.extra_space }}"
           FDE="${{ github.event.inputs.fde }}"
           CROSS="${{ github.event.inputs.cross }}"
-          FLAGS="-c $PMB_CONFIG -p $PMAPORTS_DIR -w $PMB_WORK -E ${{ github.event.inputs.extra_space }} -t 3600 -j 2 --details-to-stdout"
+
+          PMB_FLAGS=(
+            -c "$PMB_CONFIG"
+            -p "$PMAPORTS_DIR"
+            -w "$PMB_WORK"
+            -E "$EXTRA"
+            -t 3600
+            -j 1
+            --details-to-stdout
+          )
+
           if [ "$CROSS" = "false" ]; then
-            FLAGS="$FLAGS --no-cross"
+            PMB_FLAGS+=(--no-cross)
           fi
+
+          echo "=== Ensure native chroot exists ==="
+          pmbootstrap "${PMB_FLAGS[@]}" build_init || true
+
+          echo "=== Check chroot_native ==="
+          if [ ! -d "$PMB_WORK/chroot_native" ]; then
+            echo "chroot_native missing after build_init, retrying once..."
+            pmbootstrap "${PMB_FLAGS[@]}" shutdown || true
+            pmbootstrap "${PMB_FLAGS[@]}" build_init
+          fi
+
+          echo "=== Native chroot listing ==="
+          ls -la "$PMB_WORK" || true
+          ls -la "$PMB_WORK/chroot_native" || true
+
+          echo "=== Start pmbootstrap install ==="
           if [ "$FDE" = "true" ]; then
-            printf '147147\n147147\n' | pmbootstrap $FLAGS install --fde
+            printf '147147\n147147\n' | pmbootstrap "${PMB_FLAGS[@]}" install --fde
           else
-            printf '147147\n147147\n' | pmbootstrap $FLAGS install
+            printf '147147\n147147\n' | pmbootstrap "${PMB_FLAGS[@]}" install
           fi
 
       - name: Export
