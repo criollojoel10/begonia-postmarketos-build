@@ -104,9 +104,13 @@ jobs:
       - name: Clone pmaports
         run: |
           set -eux
+          # Clonamos master (edge channel)
           git clone --depth=1 --branch="${{ github.event.inputs.branch }}" \
             "https://gitlab.postmarketos.org/postmarketOS/pmaports.git" \
             "$PMAPORTS"
+          # pmbootstrap necesita origin/main para channels.cfg
+          # Creamos el ref remoto apuntando al mismo commit
+          git -C "$PMAPORTS" update-ref refs/remotes/origin/main origin/master
 
       - name: Prepare pmbootstrap config
         run: |
