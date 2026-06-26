@@ -91,26 +91,31 @@ jobs:
           ln -sf "$PWD/pmbootstrap/pmbootstrap.py" "$HOME/.local/bin/pmbootstrap"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
+      - name: Clone pmaports (manually, same branch as device)
+        run: |
+          set -eux
+          BRANCH="${{ github.event.inputs.branch }}"
+          git clone --depth=1 --branch="$BRANCH" https://gitlab.postmarketos.org/postmarketOS/pmaports.git pmaports
+
       - name: Show pmbootstrap version
         run: |
           set -eux
           pmbootstrap --version
 
-      - name: Write pmbootstrap config directly (non-interactive)
+      - name: Write pmbootstrap config for begonia
         run: |
           set -eux
 
           WORKDIR="$HOME/.local/var/pmbootstrap"
-          APORTSDIR="$PWD/xiaomi"
-
-          mkdir -p "$HOME/.config"
-
           BRANCH="${{ github.event.inputs.branch }}"
           UI="${{ github.event.inputs.ui }}"
+          FDE="${{ github.event.inputs.fde }}"
+
+          mkdir -p "$HOME/.config" "$WORKDIR"
 
           cat > "$HOME/.config/pmbootstrap.cfg" << CFGEOF
           [pmbootstrap]
-          aports = $APORTSDIR
+          aports = $PWD/pmaports
           work = $WORKDIR
           ui = $UI
           device = xiaomi-begonia
@@ -126,22 +131,29 @@ jobs:
 
           [build_options]
           cross = True
-
-          [install]
-          fde = ${{ github.event.inputs.fde }}
           CFGEOF
 
+          echo "=== Config written ==="
           cat "$HOME/.config/pmbootstrap.cfg"
 
       - name: Verify config
         run: |
           set -eux
           pmbootstrap status
+          pmbootstrap -E "${{ github.event.inputs.extra_space }}" install --dry-run 2>&1 | head -20 || true
 
       - name: Build postmarketOS image
         run: |
           set -eux
-          pmbootstrap install
+
+          EXTRA="${{ github.event.inputs.extra_space }}"
+          FDE="${{ github.event.inputs.fde }}"
+
+          if [ "$FDE" = "true" ]; then
+            pmbootstrap -E "$EXTRA" install --fde
+          else
+            pmbootstrap -E "$EXTRA" install
+          fi
 
       - name: Export images
         run: |
