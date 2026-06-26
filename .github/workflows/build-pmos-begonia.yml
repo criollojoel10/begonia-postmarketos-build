@@ -1,0 +1,168 @@
+name: Build postmarketOS for xiaomi-begonia
+
+on:
+  workflow_dispatch:
+    inputs:
+      ui:
+        description: "Interfaz: phosh, console, weston, plasma-mobile"
+        required: true
+        default: "phosh"
+        type: choice
+        options:
+          - phosh
+          - console
+          - weston
+          - plasma-mobile
+      fde:
+        description: "Activar Full Disk Encryption"
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      extra_space:
+        description: "Espacio extra en MB para la imagen rootfs"
+        required: true
+        default: "2048"
+      branch:
+        description: "Branch de postmarketOS"
+        required: true
+        default: "edge"
+        type: choice
+        options:
+          - edge
+
+jobs:
+  build:
+    name: Build pmOS xiaomi-begonia
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Free disk space
+        run: |
+          set -eux
+          df -h
+          sudo rm -rf /usr/share/dotnet || true
+          sudo rm -rf /opt/ghc || true
+          sudo rm -rf /usr/local/lib/android || true
+          sudo rm -rf /opt/hostedtoolcache/CodeQL || true
+          docker system prune -af || true
+          df -h
+
+      - name: Install dependencies
+        run: |
+          set -eux
+          sudo apt-get update
+          sudo apt-get install -y \
+            git \
+            python3 \
+            python3-pip \
+            python3-venv \
+            python3-setuptools \
+            python3-wheel \
+            build-essential \
+            bison \
+            flex \
+            bc \
+            cpio \
+            zip \
+            unzip \
+            xz-utils \
+            zstd \
+            kmod \
+            file \
+            rsync \
+            android-sdk-platform-tools \
+            qemu-user-static \
+            binfmt-support \
+            ca-certificates \
+            openssl
+
+      - name: Clone pmbootstrap
+        run: |
+          set -eux
+          git clone --depth=1 https://gitlab.postmarketos.org/postmarketOS/pmbootstrap.git
+          mkdir -p "$HOME/.local/bin"
+          ln -sf "$PWD/pmbootstrap/pmbootstrap.py" "$HOME/.local/bin/pmbootstrap"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Show pmbootstrap version
+        run: |
+          set -eux
+          pmbootstrap --version
+
+      - name: Initialize pmbootstrap config for begonia
+        run: |
+          set -eux
+
+          UI="${{ github.event.inputs.ui }}"
+          BRANCH="${{ github.event.inputs.branch }}"
+
+          pmbootstrap init <<EOF
+          $BRANCH
+          xiaomi
+          begonia
+          $UI
+          joel
+          147147
+          147147
+          y
+          EOF
+
+          pmbootstrap status || true
+
+      - name: Build postmarketOS image
+        run: |
+          set -eux
+
+          EXTRA="${{ github.event.inputs.extra_space }}"
+          FDE="${{ github.event.inputs.fde }}"
+
+          if [ "$FDE" = "true" ]; then
+            pmbootstrap -E "$EXTRA" install --fde
+          else
+            pmbootstrap -E "$EXTRA" install
+          fi
+
+      - name: Export images
+        run: |
+          set -eux
+          pmbootstrap export
+
+          mkdir -p artifacts
+          cp -av /tmp/postmarketOS-export/* artifacts/ || true
+
+          echo "=== Artifacts ==="
+          find artifacts -maxdepth 2 -type f -printf "%p %s bytes
+" | sort
+
+      - name: Generate checksums
+        run: |
+          set -eux
+          cd artifacts
+          sha256sum * > SHA256SUMS.txt || true
+          cd ..
+
+      - name: Save pmbootstrap logs
+        if: always()
+        run: |
+          set +e
+          mkdir -p artifacts/logs
+          cp -av ~/.local/var/pmbootstrap/log.txt artifacts/logs/pmbootstrap-log.txt 2>/dev/null || true
+          cp -av ~/.config/pmbootstrap*.cfg artifacts/logs/ 2>/dev/null || true
+          pmbootstrap status > artifacts/logs/pmbootstrap-status.txt 2>&1 || true
+          df -h > artifacts/logs/df-h.txt 2>&1 || true
+          find ~/.local/var/pmbootstrap -maxdepth 3 -type f -name "*.log" -exec cp -av {} artifacts/logs/ \; 2>/dev/null || true
+
+      - name: Upload postmarketOS artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: postmarketos-xiaomi-begonia-${{ github.event.inputs.ui }}-fde-${{ github.event.inputs.fde }}
+          path: artifacts/
+          retention-days: 14
