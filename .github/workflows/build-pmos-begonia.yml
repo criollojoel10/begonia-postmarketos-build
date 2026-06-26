@@ -26,18 +26,23 @@ on:
         required: true
         default: "2048"
       branch:
-        description: "Branch de postmarketOS"
+        description: "Branch de postmarketOS/pmaports"
         required: true
-        default: "edge"
+        default: "master"
         type: choice
         options:
-          - edge
+          - master
 
 jobs:
   build:
     name: Build pmOS xiaomi-begonia
     runs-on: ubuntu-24.04
     timeout-minutes: 360
+
+    env:
+      PMB_WORK: /home/runner/.local/var/pmbootstrap
+      PMB_CONFIG: /home/runner/.config/pmbootstrap_v3.cfg
+      PMAPORTS: /home/runner/work/begonia-postmarketos-build/begonia-postmarketos-build/pmaports
 
     steps:
       - name: Checkout repo
@@ -91,31 +96,29 @@ jobs:
           ln -sf "$PWD/pmbootstrap/pmbootstrap.py" "$HOME/.local/bin/pmbootstrap"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      - name: Clone pmaports (master branch = edge channel)
+      - name: Clone pmaports (master = edge channel)
         run: |
           set -eux
-          # pmaports master branch corresponds to postmarketOS edge channel
           git clone --depth=1 --branch=master https://gitlab.postmarketos.org/postmarketOS/pmaports.git pmaports
+          echo "pmaports cloned to $PWD/pmaports"
+          ls -la pmaports/
 
       - name: Show pmbootstrap version
         run: |
           set -eux
-          pmbootstrap --version
+          pmbootstrap -c "$PMB_CONFIG" -p "$PMAPORTS" -w "$PMB_WORK" --version
 
-      - name: Write pmbootstrap config for begonia
+      - name: Write pmbootstrap v3 config
         run: |
           set -eux
 
-          WORKDIR="$HOME/.local/var/pmbootstrap"
+          mkdir -p "$(dirname $PMB_CONFIG)" "$PMB_WORK"
           UI="${{ github.event.inputs.ui }}"
-          FDE="${{ github.event.inputs.fde }}"
 
-          mkdir -p "$HOME/.config" "$WORKDIR"
-
-          cat > "$HOME/.config/pmbootstrap.cfg" << CFGEOF
+          cat > "$PMB_CONFIG" << CFGEOF
           [pmbootstrap]
-          aports = $PWD/pmaports
-          work = $WORKDIR
+          aports = $PMAPORTS
+          work = $PMB_WORK
           ui = $UI
           device = xiaomi-begonia
           user = joel
@@ -132,8 +135,13 @@ jobs:
           cross = True
           CFGEOF
 
-          echo "=== Config written ==="
-          cat "$HOME/.config/pmbootstrap.cfg"
+          echo "=== Config written to $PMB_CONFIG ==="
+          cat "$PMB_CONFIG"
+
+      - name: Verify pmbootstrap can read config
+        run: |
+          set -eux
+          pmbootstrap -c "$PMB_CONFIG" -p "$PMAPORTS" -w "$PMB_WORK" status
 
       - name: Build postmarketOS image
         run: |
@@ -143,15 +151,15 @@ jobs:
           FDE="${{ github.event.inputs.fde }}"
 
           if [ "$FDE" = "true" ]; then
-            pmbootstrap -E "$EXTRA" install --fde
+            pmbootstrap -c "$PMB_CONFIG" -p "$PMAPORTS" -w "$PMB_WORK" -E "$EXTRA" install --fde
           else
-            pmbootstrap -E "$EXTRA" install
+            pmbootstrap -c "$PMB_CONFIG" -p "$PMAPORTS" -w "$PMB_WORK" -E "$EXTRA" install
           fi
 
       - name: Export images
         run: |
           set -eux
-          pmbootstrap export
+          pmbootstrap -c "$PMB_CONFIG" -p "$PMAPORTS" -w "$PMB_WORK" export
 
           mkdir -p artifacts
           cp -av /tmp/postmarketOS-export/* artifacts/ || true
@@ -171,11 +179,11 @@ jobs:
         run: |
           set +e
           mkdir -p artifacts/logs
-          cp -av ~/.local/var/pmbootstrap/log.txt artifacts/logs/pmbootstrap-log.txt 2>/dev/null || true
-          cp -av ~/.config/pmbootstrap*.cfg artifacts/logs/ 2>/dev/null || true
-          pmbootstrap status > artifacts/logs/pmbootstrap-status.txt 2>&1 || true
+          cp -av "$PMB_WORK/log.txt" artifacts/logs/pmbootstrap-log.txt 2>/dev/null || true
+          cp -av "$PMB_CONFIG" artifacts/logs/ 2>/dev/null || true
+          pmbootstrap -c "$PMB_CONFIG" -p "$PMAPORTS" -w "$PMB_WORK" status > artifacts/logs/pmbootstrap-status.txt 2>&1 || true
           df -h > artifacts/logs/df-h.txt 2>&1 || true
-          find ~/.local/var/pmbootstrap -maxdepth 3 -type f -name "*.log" -exec cp -av {} artifacts/logs/ \; 2>/dev/null || true
+          find "$PMB_WORK" -maxdepth 3 -type f -name "*.log" -exec cp -av {} artifacts/logs/ \; 2>/dev/null || true
 
       - name: Upload postmarketOS artifacts
         uses: actions/upload-artifact@v4
