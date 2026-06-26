@@ -96,38 +96,52 @@ jobs:
           set -eux
           pmbootstrap --version
 
-      - name: Initialize pmbootstrap config for begonia
+      - name: Write pmbootstrap config directly (non-interactive)
         run: |
           set -eux
 
-          UI="${{ github.event.inputs.ui }}"
+          WORKDIR="$HOME/.local/var/pmbootstrap"
+          APORTSDIR="$PWD/xiaomi"
+
+          mkdir -p "$HOME/.config"
+
           BRANCH="${{ github.event.inputs.branch }}"
+          UI="${{ github.event.inputs.ui }}"
 
-          pmbootstrap init <<EOF
-          $BRANCH
-          xiaomi
-          begonia
-          $UI
-          joel
-          147147
-          147147
-          y
-          EOF
+          cat > "$HOME/.config/pmbootstrap.cfg" << CFGEOF
+          [pmbootstrap]
+          aports = $APORTSDIR
+          work = $WORKDIR
+          ui = $UI
+          device = xiaomi-begonia
+          user = joel
+          extra_space = ${{ github.event.inputs.extra_space }}
+          ssh_keys = False
+          sudo_timer = False
+          systemd = True
 
-          pmbootstrap status || true
+          [mirrors]
+
+          [providers]
+
+          [build_options]
+          cross = True
+
+          [install]
+          fde = ${{ github.event.inputs.fde }}
+          CFGEOF
+
+          cat "$HOME/.config/pmbootstrap.cfg"
+
+      - name: Verify config
+        run: |
+          set -eux
+          pmbootstrap status
 
       - name: Build postmarketOS image
         run: |
           set -eux
-
-          EXTRA="${{ github.event.inputs.extra_space }}"
-          FDE="${{ github.event.inputs.fde }}"
-
-          if [ "$FDE" = "true" ]; then
-            pmbootstrap -E "$EXTRA" install --fde
-          else
-            pmbootstrap -E "$EXTRA" install
-          fi
+          pmbootstrap install
 
       - name: Export images
         run: |
