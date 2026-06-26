@@ -154,38 +154,48 @@ jobs:
             printf '147147\n147147\n' | pmbootstrap "${PMB_FLAGS[@]}" install || true
           fi
 
-      - name: Salvage generated images
+      - name: Export (primary)
         if: always()
         run: |
-          mkdir -p artifacts/salvage
-          # Direct copy from workdir (images survive even if install cleanup fails)
-          find "$PMB_WORK" -path "*/chroot_native/home/pmos/rootfs/*.img" 2>/dev/null \
-            -exec cp -av {} artifacts/salvage/ \;
-          # Also check export dir if it has anything
-          if [ -d /tmp/postmarketOS-export ]; then
-            cp -av /tmp/postmarketOS-export/* artifacts/salvage/ 2>/dev/null || true
-          fi
-          find artifacts/salvage -type f -printf "%p %s bytes\n" | sort > artifacts/salvage/salvaged-files.txt || true
-
-      - name: Export
-        run: |
-          pmbootstrap -c $PMB_CONFIG -p $PMAPORTS_DIR -w $PMB_WORK -t 3600 --details-to-stdout export || true
           mkdir -p artifacts/export
+          pmbootstrap -c $PMB_CONFIG -p $PMAPORTS_DIR -w $PMB_WORK -t 3600 --details-to-stdout export || true
           cp -av /tmp/postmarketOS-export/* artifacts/export/ 2>/dev/null || true
-          # Also fallback: try direct copy from workdir
-          if [ -z "$(ls -A artifacts/export/ 2>/dev/null)" ]; then
-            find "$PMB_WORK" -path "*/chroot_native/home/pmos/rootfs/*.img" -exec cp -av {} artifacts/export/ \;
-          fi
-          find artifacts/export -type f -printf "%p %s bytes\n" | sort | tee artifacts/export/files.txt || true
+
+      - name: Salvage images
+        if: always()
+        run: |
+          set +e
+          mkdir -p artifacts/salvage
+          # Copy from workdir
+          find "$PMB_WORK" -name "*.img" -exec cp -av {} artifacts/salvage/ \; 2>/dev/null
+          find "$PMB_WORK" -name "boot.img" -exec cp -av {} artifacts/salvage/ \; 2>/dev/null
+          find "$PMB_WORK" -name "initramfs*" -exec cp -av {} artifacts/salvage/ \; 2>/dev/null
+          find "$PMB_WORK" -name "vmlinuz*" -exec cp -av {} artifacts/salvage/ \; 2>/dev/null
+          find artifacts/salvage -type f -printf "%p %s bytes\n" | sort > artifacts/salvage/salvaged-files.txt 2>/dev/null
+          set -e
+
+      - name: Consolidate images
+        if: always()
+        run: |
+          set +e
+          mkdir -p artifacts/images
+          cp -av artifacts/export/* artifacts/images/ 2>/dev/null
+          cp -av artifacts/salvage/* artifacts/images/ 2>/dev/null
+          find artifacts/images -type f -printf "%p %s bytes\n" | sort | tee artifacts/images/files.txt
+          set -e
 
       - name: Validate
+        if: always()
         run: |
-          CNT=$(find artifacts -type f \( -name "*.img" -o -name "*boot*" -o -name "*rootfs*" -o -name "*.zip" \) 2>/dev/null | wc -l)
+          CNT=$(find artifacts -name "*.img" 2>/dev/null | wc -l)
           echo "image-files=$CNT"
           if [ "$CNT" -lt 1 ]; then
-            echo "ERROR: No images"
+            echo "ERROR: No images found anywhere"
+            find artifacts -type f -name "*.txt" -exec cat {} \; 2>/dev/null || true
             exit 1
           fi
+          echo "SUCCESS: $CNT image file(s) found"
+          find artifacts -type f -name "*.img" -o -name "boot*" -o -name "initramfs*" -o -name "vmlinuz*" 2>/dev/null | sort
 
       - name: Checksums
         if: always()
