@@ -86,46 +86,51 @@ jobs:
             qemu-user-static \
             binfmt-support \
             ca-certificates \
-            openssl
+            openssl \
+            kpartx \
+            util-linux \
+            parted \
+            e2fsprogs \
+            dosfstools
 
       - name: Clone pmbootstrap
         run: |
           set -eux
-          git clone --depth=1 https://gitlab.postmarketos.org/postmarketOS/pmbootstrap.git
+          git clone --depth=1 "https://gitlab.postmarketos.org/postmarketOS/pmbootstrap.git"
           mkdir -p "$HOME/.local/bin"
           ln -sf "$PWD/pmbootstrap/pmbootstrap.py" "$HOME/.local/bin/pmbootstrap"
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      - name: Clone pmaports (master = edge channel)
+      - name: Clone pmaports
         run: |
           set -eux
-          git clone --depth=1 --branch=master https://gitlab.postmarketos.org/postmarketOS/pmaports.git pmaports
-          echo "pmaports cloned to $PWD/pmaports"
-          ls -la pmaports/
+          git clone --depth=1 --branch="${{ github.event.inputs.branch }}" \
+            "https://gitlab.postmarketos.org/postmarketOS/pmaports.git" \
+            "$PMAPORTS"
 
-      - name: Show pmbootstrap version
-        run: |
-          set -eux
-          pmbootstrap -c "$PMB_CONFIG" -p "$PMAPORTS" -w "$PMB_WORK" --version
-
-      - name: Write pmbootstrap v3 config
+      - name: Prepare pmbootstrap config
         run: |
           set -eux
 
-          mkdir -p "$(dirname $PMB_CONFIG)" "$PMB_WORK"
           UI="${{ github.event.inputs.ui }}"
+          EXTRA="${{ github.event.inputs.extra_space }}"
 
-          cat > "$PMB_CONFIG" << CFGEOF
+          mkdir -p "$HOME/.config"
+          mkdir -p "$PMB_WORK/cache_git"
+
+          # pmbootstrap a veces busca pmaports aquí:
+          ln -sfn "$PMAPORTS" "$PMB_WORK/cache_git/pmaports"
+
+          cat > "$PMB_CONFIG" << EOF
           [pmbootstrap]
           aports = $PMAPORTS
           work = $PMB_WORK
-          ui = $UI
           device = xiaomi-begonia
+          ui = $UI
           user = joel
-          extra_space = ${{ github.event.inputs.extra_space }}
+          extra_space = $EXTRA
           ssh_keys = False
           sudo_timer = False
-          systemd = True
 
           [mirrors]
 
@@ -133,15 +138,24 @@ jobs:
 
           [build_options]
           cross = True
-          CFGEOF
+          EOF
 
-          echo "=== Config written to $PMB_CONFIG ==="
+          # Limpiar espacios iniciales generados por YAML heredoc
+          sed -i 's/^  //' "$PMB_CONFIG"
+
+          echo "=== pmbootstrap config ==="
           cat "$PMB_CONFIG"
 
-      - name: Verify pmbootstrap can read config
-        run: |
-          set -eux
-          pmbootstrap -c "$PMB_CONFIG" -p "$PMAPORTS" -w "$PMB_WORK" status
+          echo "=== pmbootstrap version ==="
+          pmbootstrap --version
+
+          echo "=== pmbootstrap status ==="
+          pmbootstrap \
+            -c "$PMB_CONFIG" \
+            -p "$PMAPORTS" \
+            -w "$PMB_WORK" \
+            -t 3600 \
+            status || true
 
       - name: Build postmarketOS image
         run: |
@@ -151,15 +165,33 @@ jobs:
           FDE="${{ github.event.inputs.fde }}"
 
           if [ "$FDE" = "true" ]; then
-            pmbootstrap -c "$PMB_CONFIG" -p "$PMAPORTS" -w "$PMB_WORK" -E "$EXTRA" install --fde
+            pmbootstrap \
+              -c "$PMB_CONFIG" \
+              -p "$PMAPORTS" \
+              -w "$PMB_WORK" \
+              -E "$EXTRA" \
+              -t 3600 \
+              --details-to-stdout \
+              install --fde
           else
-            pmbootstrap -c "$PMB_CONFIG" -p "$PMAPORTS" -w "$PMB_WORK" -E "$EXTRA" install
+            pmbootstrap \
+              -c "$PMB_CONFIG" \
+              -p "$PMAPORTS" \
+              -w "$PMB_WORK" \
+              -E "$EXTRA" \
+              -t 3600 \
+              --details-to-stdout \
+              install
           fi
 
       - name: Export images
         run: |
           set -eux
-          pmbootstrap -c "$PMB_CONFIG" -p "$PMAPORTS" -w "$PMB_WORK" export
+          pmbootstrap \
+            -c "$PMB_CONFIG" \
+            -p "$PMAPORTS" \
+            -w "$PMB_WORK" \
+            export
 
           mkdir -p artifacts
           cp -av /tmp/postmarketOS-export/* artifacts/ || true
@@ -181,7 +213,12 @@ jobs:
           mkdir -p artifacts/logs
           cp -av "$PMB_WORK/log.txt" artifacts/logs/pmbootstrap-log.txt 2>/dev/null || true
           cp -av "$PMB_CONFIG" artifacts/logs/ 2>/dev/null || true
-          pmbootstrap -c "$PMB_CONFIG" -p "$PMAPORTS" -w "$PMB_WORK" status > artifacts/logs/pmbootstrap-status.txt 2>&1 || true
+          cp -av "$PMB_WORK/cache_git/pmaports" artifacts/logs/pmaports-symlink 2>/dev/null || true
+          pmbootstrap \
+            -c "$PMB_CONFIG" \
+            -p "$PMAPORTS" \
+            -w "$PMB_WORK" \
+            status > artifacts/logs/pmbootstrap-status.txt 2>&1 || true
           df -h > artifacts/logs/df-h.txt 2>&1 || true
           find "$PMB_WORK" -maxdepth 3 -type f -name "*.log" -exec cp -av {} artifacts/logs/ \; 2>/dev/null || true
 
