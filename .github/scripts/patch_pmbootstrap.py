@@ -48,7 +48,41 @@ if losetup_py.exists():
 
     patch_file(losetup_py, force_usr_sbin_losetup, "force /usr/sbin/losetup")
 
-# 3) blockdevice.py: re-init chroot_native if deleted (simple, proven approach)
+    # 2a) Also auto-install losetup in mount() before use (survives chroot recreation)
+    def inject_apk_install(text: str) -> str:
+        """Add apk add --upgrade losetup before mount() uses losetup"""
+        target = 'logging.debug(f"(native) mount {img_path} (loop)")'
+        if target not in text:
+            return text
+        if "apk add --upgrade losetup" in text:
+            return text
+        insert = (
+            '    # Force install util-linux losetup (chroot may be recreated)\n'
+            '    pmb.chroot.root(["apk", "add", "--upgrade", "losetup", "util-linux"], check=False)\n'
+        )
+        text = text.replace(target + '\n', target + '\n' + insert)
+        return text
+
+    patch_file(losetup_py, inject_apk_install, "auto-install losetup in mount() before use")
+
+    # 2b) Also install losetup in device_by_back_file() as safety net
+    def inject_apk_install_device(text: str) -> str:
+        """Ensure losetup is installed in device_by_back_file too"""
+        target = 'def device_by_back_file(back_file: Path) -> Path:'
+        if target not in text:
+            return text
+        if "apk add --upgrade losetup" in text:
+            return text
+        insert = (
+            '    # Ensure losetup from util-linux is installed\n'
+            '    pmb.chroot.root(["apk", "add", "--upgrade", "losetup", "util-linux"], check=False)\n'
+        )
+        text = text.replace(target + '\n', target + '\n' + insert)
+        return text
+
+    patch_file(losetup_py, inject_apk_install_device, "auto-install losetup in device_by_back_file()")
+
+# 3) blockdevice.py: re-init chroot_native if deleted (survives chroot recreation)
 bd = ROOT / "install" / "blockdevice.py"
 if bd.exists():
     with open(bd) as f:

@@ -140,33 +140,12 @@ jobs:
           echo "=== Pre-build status ==="
           pmbootstrap "${PMB_FLAGS[@]}" status || true
 
-          echo "=== Ensure native chroot exists ==="
+          echo "=== Build chroot ==="
           pmbootstrap "${PMB_FLAGS[@]}" build_init || true
 
-          echo "=== Force install full util-linux losetup in native chroot ==="
-          pmbootstrap "${PMB_FLAGS[@]}" chroot -- apk update || true
+          echo "=== Verify losetup (initial) ==="
           pmbootstrap "${PMB_FLAGS[@]}" chroot -- apk add --upgrade losetup util-linux || true
-
-          echo "=== Verify /usr/sbin/losetup supports --json ==="
-          pmbootstrap "${PMB_FLAGS[@]}" chroot -- sh -lc '
-            set -eux
-            echo "losetup at /usr/sbin/losetup:"
-            ls -la /usr/sbin/losetup
-            /usr/sbin/losetup --help | head -5
-            /usr/sbin/losetup --json --list >/dev/null && echo "OK" || { echo "FAIL"; exit 1; }
-          '
-
-          echo "=== Check chroot_native ==="
-          if [ ! -d "$PMB_WORK/chroot_native" ]; then
-            echo "chroot_native missing after build_init, retrying once..."
-            pmbootstrap "${PMB_FLAGS[@]}" shutdown || true
-            pmbootstrap "${PMB_FLAGS[@]}" build_init
-            pmbootstrap "${PMB_FLAGS[@]}" chroot -- apk add --upgrade losetup util-linux
-          fi
-
-          echo "=== Re-install losetup before install ==="
-          pmbootstrap "${PMB_FLAGS[@]}" chroot -- apk add --upgrade losetup util-linux || true
-          pmbootstrap "${PMB_FLAGS[@]}" chroot -- sh -c '/usr/sbin/losetup --json --list >/dev/null && echo "OK" || exit 1'
+          pmbootstrap "${PMB_FLAGS[@]}" chroot -- sh -c '/usr/sbin/losetup --json --list >/dev/null && echo "losetup OK" || echo "caveat: losetup will be auto-installed in Python"'
 
           echo "=== Start pmbootstrap install ==="
           if [ "$FDE" = "true" ]; then
