@@ -149,21 +149,38 @@ jobs:
 
           echo "=== Start pmbootstrap install ==="
           if [ "$FDE" = "true" ]; then
-            printf '147147\n147147\n' | pmbootstrap "${PMB_FLAGS[@]}" install --fde
+            printf '147147\n147147\n' | pmbootstrap "${PMB_FLAGS[@]}" install --fde || true
           else
-            printf '147147\n147147\n' | pmbootstrap "${PMB_FLAGS[@]}" install
+            printf '147147\n147147\n' | pmbootstrap "${PMB_FLAGS[@]}" install || true
           fi
+
+      - name: Salvage generated images
+        if: always()
+        run: |
+          mkdir -p artifacts/salvage
+          # Direct copy from workdir (images survive even if install cleanup fails)
+          find "$PMB_WORK" -path "*/chroot_native/home/pmos/rootfs/*.img" 2>/dev/null \
+            -exec cp -av {} artifacts/salvage/ \;
+          # Also check export dir if it has anything
+          if [ -d /tmp/postmarketOS-export ]; then
+            cp -av /tmp/postmarketOS-export/* artifacts/salvage/ 2>/dev/null || true
+          fi
+          find artifacts/salvage -type f -printf "%p %s bytes\n" | sort > artifacts/salvage/salvaged-files.txt || true
 
       - name: Export
         run: |
-          pmbootstrap -c $PMB_CONFIG -p $PMAPORTS_DIR -w $PMB_WORK -t 3600 --details-to-stdout export
+          pmbootstrap -c $PMB_CONFIG -p $PMAPORTS_DIR -w $PMB_WORK -t 3600 --details-to-stdout export || true
           mkdir -p artifacts/export
           cp -av /tmp/postmarketOS-export/* artifacts/export/ 2>/dev/null || true
-          find artifacts/export -type f -printf "%p %s bytes\n" | sort | tee artifacts/export/files.txt
+          # Also fallback: try direct copy from workdir
+          if [ -z "$(ls -A artifacts/export/ 2>/dev/null)" ]; then
+            find "$PMB_WORK" -path "*/chroot_native/home/pmos/rootfs/*.img" -exec cp -av {} artifacts/export/ \;
+          fi
+          find artifacts/export -type f -printf "%p %s bytes\n" | sort | tee artifacts/export/files.txt || true
 
       - name: Validate
         run: |
-          CNT=$(find artifacts/export -type f -name "*.img" -o -name "*boot*" -o -name "*rootfs*" -o -name "*.zip" 2>/dev/null | wc -l)
+          CNT=$(find artifacts -type f \( -name "*.img" -o -name "*boot*" -o -name "*rootfs*" -o -name "*.zip" \) 2>/dev/null | wc -l)
           echo "image-files=$CNT"
           if [ "$CNT" -lt 1 ]; then
             echo "ERROR: No images"

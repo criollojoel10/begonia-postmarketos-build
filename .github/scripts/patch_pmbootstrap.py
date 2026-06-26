@@ -118,7 +118,22 @@ if bd.exists():
     else:
         print(f"- No change {bd}: already patched or structure changed")
 
-# 4) partition.py: ensure parted is installed before partition operations
+# 4) _install.py: fix rm in-pmbootstrap without -f (bug #2309 cleanup crash)
+install_py = ROOT / "install" / "_install.py"
+if install_py.exists():
+    def fix_rm_in_pmbootstrap(text: str) -> str:
+        """Use rm -f instead of rm for in-pmbootstrap cleanup"""
+        old = '["rm", chroot / "in-pmbootstrap"]'
+        new = '["rm", "-f", chroot / "in-pmbootstrap"]'
+        if old not in text:
+            return text
+        if new in text:
+            return text
+        return text.replace(old, new)
+
+    patch_file(install_py, fix_rm_in_pmbootstrap, "rm -f in-pmbootstrap (ignore if already removed)")
+
+# 5) partition.py: ensure parted is installed before partition operations
 part_py = ROOT / "install" / "partition.py"
 if part_py.exists():
     def ensure_partition_tools(text: str) -> str:
