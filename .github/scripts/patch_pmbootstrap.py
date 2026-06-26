@@ -33,26 +33,36 @@ with open(bd, 'w') as f:
     f.write(c)
 print("✓ Patched blockdevice.py: chroot_native re-init")
 
-# --- Fix 2: losetup.py - use /usr/bin/losetup (util-linux, not busybox) ---
-# Only patch pmb.chroot.root calls (inside Alpine native chroot).
-# Do NOT patch pmb.helpers.run.root calls (Ubuntu host, losetup already works).
+# --- Fix 2: losetup.py - use /sbin/losetup (util-linux, not busybox) ---
+# Only patch pmb.chroot.root calls (inside Alpine native chroot, where
+# busybox /bin/losetup shadows util-linux /sbin/losetup).
+# Do NOT patch pmb.helpers.run.root calls (Ubuntu host already has full losetup).
 lp = os.path.join(pmb_root, 'pmb', 'install', 'losetup.py')
 with open(lp) as f:
     c = f.read()
 
-# Only target chroot-side losetup calls and the losetup_cmd variable
+# Patch pmb.chroot.root calls (inside Alpine native chroot)
 c = c.replace('pmb.chroot.root(["losetup"',
-              'pmb.chroot.root(["/usr/bin/losetup"')
-# Also patch the losetup_cmd variable definition in mount()
+              'pmb.chroot.root(["/sbin/losetup"')
+# Also patch losetup_cmd variable definition in mount()
 c = c.replace('["losetup", "-f", "-P", img_path]',
-              '["/usr/bin/losetup", "-f", "-P", img_path]')
+              '["/sbin/losetup", "-f", "-P", img_path]')
 
 with open(lp, 'w') as f:
     f.write(c)
-print("✓ Patched losetup.py: /usr/bin/losetup in chroot calls only")
+print("✓ Patched losetup.py: /sbin/losetup in chroot calls (Alpine util-linux)")
 
-# Verify no host-side calls were accidentally patched
-with open(lp) as f:
+# --- Fix 3: config/__init__.py - add "losetup" package explicitly to install_native_packages ---
+cp = os.path.join(pmb_root, 'pmb', 'config', '__init__.py')
+with open(cp) as f:
     c = f.read()
-if '/usr/bin/losetup' in c and 'pmb.helpers.run.root(["/usr/bin/losetup"' not in c:
-    print("  (Host-side pmb.helpers.run.root calls left untouched ✓)")
+
+# Add "losetup" package after "util-linux" in install_native_packages
+if '"losetup"' not in c:
+    c = c.replace('"util-linux", "parted"',
+                  '"util-linux", "losetup", "parted"')
+    with open(cp, 'w') as f:
+        f.write(c)
+    print("✓ Patched config/__init__.py: losetup package added to install_native_packages")
+else:
+    print("  (config/__init__.py already has losetup in install_native_packages ✓)")
