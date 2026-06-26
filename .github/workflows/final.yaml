@@ -128,8 +128,8 @@ jobs:
           echo "=== Removing cached kernel packages ==="
           find "$PMB_WORK/packages" -name "${KERNEL_PKG}*.apk" -delete 2>/dev/null || true
 
-          echo "=== Building kernel package ==="
-          pmbootstrap -c "$PMB_CONFIG" -p "$PMAPORTS_DIR" -w "$PMB_WORK" -t 3600 -j 1 --details-to-stdout build "$KERNEL_PKG" 2>&1
+          echo "=== Building kernel package (force) ==="
+          pmbootstrap -c "$PMB_CONFIG" -p "$PMAPORTS_DIR" -w "$PMB_WORK" -t 3600 -j 1 --details-to-stdout build "$KERNEL_PKG" --force 2>&1
 
           echo "=== Newly built kernel packages ==="
           find "$PMB_WORK/packages" -name "${KERNEL_PKG}*.apk" 2>/dev/null
