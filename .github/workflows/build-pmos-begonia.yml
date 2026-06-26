@@ -220,7 +220,7 @@ jobs:
           FDE="${{ github.event.inputs.fde }}"
 
           if [ "$FDE" = "true" ]; then
-            pmbootstrap \
+            printf '147147\n147147\n' | pmbootstrap \
               -c "$PMB_CONFIG" \
               -p "$PMAPORTS_DIR" \
               -w "$PMB_WORK" \
@@ -229,7 +229,7 @@ jobs:
               --details-to-stdout \
               install --fde
           else
-            pmbootstrap \
+            printf '147147\n147147\n' | pmbootstrap \
               -c "$PMB_CONFIG" \
               -p "$PMAPORTS_DIR" \
               -w "$PMB_WORK" \
