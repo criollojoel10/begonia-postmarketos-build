@@ -166,6 +166,13 @@ jobs:
           pmbootstrap "${PMB_FLAGS[@]}" chroot -- apk add --upgrade losetup util-linux || true
           pmbootstrap "${PMB_FLAGS[@]}" chroot -- sh -c '/usr/sbin/losetup --json --list >/dev/null && echo "losetup OK" || echo "caveat: losetup will be auto-installed in Python"'
 
+          echo "=== Create 4G swap to prevent OOM during Phosh cross-build ==="
+          sudo fallocate -l 4G /swapfile 2>/dev/null || sudo dd if=/dev/zero of=/swapfile bs=1M count=4096 2>/dev/null
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile 2>/dev/null
+          sudo swapon /swapfile 2>/dev/null
+          free -h
+
           echo "=== Start pmbootstrap install ==="
           if [ "$FDE" = "true" ]; then
             printf '147147\n147147\n' | pmbootstrap "${PMB_FLAGS[@]}" install --fde
