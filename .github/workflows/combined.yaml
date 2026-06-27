@@ -1,0 +1,277 @@
+name: Build pmOS begonia (Phosh + Plasma Mobile)
+
+on:
+  workflow_dispatch:
+    inputs:
+      fde:
+        description: Full Disk Encryption
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      extra_space:
+        description: Extra space MB
+        required: true
+        default: "4096"
+      cross:
+        description: Cross compilation
+        required: true
+        default: "false"
+        type: choice
+        options:
+          - "true"
+          - "false"
+      pmaports_branch:
+        description: pmaports branch
+        required: true
+        default: main
+        type: choice
+        options:
+          - main
+          - master
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+
+    env:
+      PMB_WORK: /home/runner/.local/var/pmbootstrap
+      PMB_CONFIG: /home/runner/.config/pmbootstrap_v3.cfg
+      PMAPORTS_DIR: /home/runner/work/begonia-postmarketos-build/begonia-postmarketos-build/pmaports
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free disk
+        run: |
+          df -h
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/lib/android /opt/hostedtoolcache/CodeQL
+          docker system prune -af
+          df -h
+
+      - name: Dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq git python3 python3-pip python3-venv python3-setuptools python3-wheel build-essential bison flex bc cpio zip unzip xz-utils zstd kmod file rsync android-sdk-platform-tools qemu-user-static binfmt-support ca-certificates openssl kpartx util-linux parted e2fsprogs dosfstools findutils coreutils
+
+      - name: Clone pmbootstrap
+        run: |
+          git clone --depth=1 https://gitlab.postmarketos.org/postmarketOS/pmbootstrap.git
+          mkdir -p $HOME/.local/bin
+          ln -sf $PWD/pmbootstrap/pmbootstrap.py $HOME/.local/bin/pmbootstrap
+          echo $HOME/.local/bin >> $GITHUB_PATH
+
+      - name: Clone pmaports
+        run: |
+          BRANCH="${{ github.event.inputs.pmaports_branch }}"
+          if git clone --depth=1 --branch=$BRANCH https://gitlab.postmarketos.org/postmarketOS/pmaports.git $PMAPORTS_DIR; then
+            echo "Cloned branch: $BRANCH"
+          else
+            rm -rf $PMAPORTS_DIR
+            git clone --depth=1 --branch=master https://gitlab.postmarketos.org/postmarketOS/pmaports.git $PMAPORTS_DIR
+            echo "Fallback: master"
+          fi
+          git -C $PMAPORTS_DIR log -1 --oneline
+          git -C $PMAPORTS_DIR update-ref refs/remotes/origin/main HEAD
+
+      - name: Inspect
+        run: |
+          mkdir -p artifacts/preflight
+          find $PMAPORTS_DIR/device -maxdepth 4 -iname "*begonia*" -print | tee artifacts/preflight/begonia-files.txt
+          grep -rE "device-xiaomi-begonia|linux-postmarketos-mediatek-mt6785|firmware-xiaomi-begonia" "$PMAPORTS_DIR" > artifacts/preflight/grep-begonia.txt 2>&1 || true
+
+      - name: Config (Phosh base)
+        run: |
+          rm -rf $PMB_WORK
+          mkdir -p $HOME/.config
+
+          CROSS_INPUT="${{ github.event.inputs.cross }}"
+          if [ "$CROSS_INPUT" = "true" ]; then
+            CROSS_CFG="True"
+          else
+            CROSS_CFG="False"
+          fi
+
+          # Config with Phosh as the base UI
+          printf '[pmbootstrap]\naports = %s\nwork = %s\ndevice = xiaomi-begonia\nui = phosh\nuser = joel\nextra_space = %s\nssh_keys = False\nsudo_timer = False\n\n[build_options]\ncross = %s\n' \
+            "$PMAPORTS_DIR" "$PMB_WORK" "${{ github.event.inputs.extra_space }}" "$CROSS_CFG" > "$PMB_CONFIG"
+          mkdir -p $PMB_WORK/cache_git
+          echo "8" > $PMB_WORK/version
+          ln -sfn $PMAPORTS_DIR $PMB_WORK/cache_git/pmaports
+
+      - name: Patch pmbootstrap (CI fixes)
+        run: python3 .github/scripts/patch_pmbootstrap.py
+
+      - name: Enable USB Ethernet & WiFi dongle drivers
+        run: bash .github/scripts/enable_kernel_drivers.sh
+
+      - name: Force rebuild kernel with new drivers
+        run: |
+          KERNEL_PKG="linux-postmarketos-mediatek-mt6785"
+
+          echo "=== Updating checksums after config change ==="
+          pmbootstrap -c "$PMB_CONFIG" -p "$PMAPORTS_DIR" -w "$PMB_WORK" -t 3600 --details-to-stdout checksum "$KERNEL_PKG" 2>&1
+
+          echo "=== Removing cached kernel packages ==="
+          find "$PMB_WORK/packages" -name "${KERNEL_PKG}*.apk" -delete 2>/dev/null || true
+
+          echo "=== Building kernel package (force) ==="
+          pmbootstrap -c "$PMB_CONFIG" -p "$PMAPORTS_DIR" -w "$PMB_WORK" -t 3600 -j 1 --details-to-stdout build "$KERNEL_PKG" --force 2>&1
+
+          echo "=== Newly built kernel packages ==="
+          find "$PMB_WORK/packages" -name "${KERNEL_PKG}*.apk" 2>/dev/null
+
+      - name: Install Phosh base system
+        run: |
+          set -euxo pipefail
+
+          EXTRA="${{ github.event.inputs.extra_space }}"
+          FDE="${{ github.event.inputs.fde }}"
+          CROSS="${{ github.event.inputs.cross }}"
+
+          PMB_FLAGS=(
+            -c "$PMB_CONFIG"
+            -p "$PMAPORTS_DIR"
+            -w "$PMB_WORK"
+            -E "$EXTRA"
+            -t 3600
+            -j 1
+            --details-to-stdout
+          )
+
+          if [ "$CROSS" = "false" ]; then
+            PMB_FLAGS+=(--no-cross)
+          fi
+
+          echo "=== Pre-build status ==="
+          pmbootstrap "${PMB_FLAGS[@]}" status || true
+
+          echo "=== Build chroot ==="
+          pmbootstrap "${PMB_FLAGS[@]}" build_init || true
+
+          echo "=== Verify losetup ==="
+          pmbootstrap "${PMB_FLAGS[@]}" chroot -- apk add --upgrade losetup util-linux || true
+          pmbootstrap "${PMB_FLAGS[@]}" chroot -- sh -c '/usr/sbin/losetup --json --list >/dev/null && echo "losetup OK" || echo "caveat"'
+
+          echo "=== Check disk before swap ==="
+          df -h
+          echo "=== Create swap (soft-fail) ==="
+          FREE_GB=$(df --output=avail / | tail -1 | awk '{print int($1/1024/1024)}')
+          if [ "$FREE_GB" -ge 6 ]; then
+            sudo fallocate -l 2G /swapfile 2>/dev/null && echo "fallocate OK" || sudo dd if=/dev/zero of=/swapfile bs=1M count=2048 2>/dev/null && echo "dd OK" || true
+            sudo chmod 600 /swapfile 2>/dev/null || true
+            sudo mkswap /swapfile 2>/dev/null || true
+            sudo swapon /swapfile 2>/dev/null || true
+            free -h
+            echo "=== Swap created ==="
+          else
+            echo "⚠️ Only ${FREE_GB}GB free, skipping swap"
+          fi
+
+          echo "=== Start pmbootstrap install (Phosh) ==="
+          if [ "$FDE" = "true" ]; then
+            printf '147147\n147147\n' | pmbootstrap "${PMB_FLAGS[@]}" install --fde
+          else
+            printf '147147\n147147\n' | pmbootstrap "${PMB_FLAGS[@]}" install
+          fi
+
+      - name: Add Plasma Mobile + GDM to rootfs
+        run: |
+          set -euxo pipefail
+
+          ROOTFS="$PMB_WORK/chroot_rootfs_xiaomi-begonia"
+
+          if [ ! -d "$ROOTFS" ]; then
+            echo "ERROR: Rootfs not found at $ROOTFS"
+            ls -la "$PMB_WORK/" 2>/dev/null || true
+            exit 1
+          fi
+
+          echo "=== Checking rootfs state ==="
+          ls -la "$ROOTFS/"
+          ls -la "$ROOTFS/etc/apk/repositories" 2>/dev/null && cat "$ROOTFS/etc/apk/repositories"
+
+          echo "=== Adding Plasma Mobile (KDE) ==="
+          sudo chroot "$ROOTFS" /bin/sh -c 'apk add --no-interactive plasma-mobile postmarketos-ui-plasma-mobile 2>&1' || \
+          sudo chroot "$ROOTFS" /bin/sh -c 'apk add --no-interactive plasma-mobile 2>&1' || true
+
+          echo "=== Installing GDM (display manager for switching DEs) ==="
+          sudo chroot "$ROOTFS" /bin/sh -c 'apk add --no-interactive gdm gdm-openrc 2>&1' || true
+
+          echo "=== Configuring services ==="
+          # Disable tinydm (Phosh's single-DE autostart)
+          sudo chroot "$ROOTFS" /bin/sh -c 'rc-update del tinydm 2>/dev/null; rc-update del phosh 2>/dev/null; rc-update add gdm 2>/dev/null; rc-update add dbus 2>/dev/null' || true
+
+          echo "=== Verifying installed UIs ==="
+          sudo chroot "$ROOTFS" /bin/sh -c 'apk info 2>/dev/null | grep -iE "phosh|plasma|gdm|kwin" | sort' || echo "(grep returned nothing)"
+
+          echo "=== Rebuilding OS image with both DEs ==="
+          pmbootstrap -c "$PMB_CONFIG" -p "$PMAPORTS_DIR" -w "$PMB_WORK" -E "${{ github.event.inputs.extra_space }}" -t 3600 -j 1 --details-to-stdout install
+
+      - name: Export (primary)
+        if: always()
+        run: |
+          mkdir -p artifacts/export
+          pmbootstrap -c $PMB_CONFIG -p $PMAPORTS_DIR -w $PMB_WORK -t 3600 --details-to-stdout export || true
+          cp -av /tmp/postmarketOS-export/* artifacts/export/ 2>/dev/null || true
+
+      - name: Salvage images
+        if: always()
+        run: |
+          set +e
+          mkdir -p artifacts/salvage
+          find "$PMB_WORK" -name "*.img" -exec cp -av {} artifacts/salvage/ \; 2>/dev/null
+          find "$PMB_WORK" -name "boot.img" -exec cp -av {} artifacts/salvage/ \; 2>/dev/null
+          find "$PMB_WORK" -name "initramfs*" -exec cp -av {} artifacts/salvage/ \; 2>/dev/null
+          find "$PMB_WORK" -name "vmlinuz*" -exec cp -av {} artifacts/salvage/ \; 2>/dev/null
+          find artifacts/salvage -type f -printf "%p %s bytes\n" | sort > artifacts/salvage/salvaged-files.txt 2>/dev/null
+          set -e
+
+      - name: Consolidate images
+        if: always()
+        run: |
+          set +e
+          mkdir -p artifacts/images
+          cp -av artifacts/export/* artifacts/images/ 2>/dev/null
+          cp -av artifacts/salvage/* artifacts/images/ 2>/dev/null
+          find artifacts/images -type f -printf "%p %s bytes\n" | sort | tee artifacts/images/files.txt
+          set -e
+
+      - name: Validate
+        if: always()
+        run: |
+          CNT=$(find artifacts -name "*.img" 2>/dev/null | wc -l)
+          echo "image-files=$CNT"
+          if [ "$CNT" -lt 1 ]; then
+            echo "ERROR: No images found anywhere"
+            find artifacts -type f -name "*.txt" -exec cat {} \; 2>/dev/null || true
+            exit 1
+          fi
+          echo "SUCCESS: $CNT image file(s) found"
+          find artifacts -type f -name "*.img" -o -name "boot*" -o -name "initramfs*" -o -name "vmlinuz*" 2>/dev/null | sort
+
+      - name: Checksums
+        if: always()
+        run: |
+          find artifacts -type f -not -name SHA256SUMS.txt -print0 | xargs -0 sha256sum > artifacts/SHA256SUMS.txt 2>/dev/null || true
+
+      - name: Debug logs
+        if: always()
+        run: |
+          mkdir -p artifacts/logs
+          cp -av $PMB_CONFIG artifacts/logs/ 2>/dev/null || true
+          cp -av $PMB_WORK/log.txt artifacts/logs/pmbootstrap-log.txt 2>/dev/null || true
+          pmbootstrap -c $PMB_CONFIG -p $PMAPORTS_DIR -w $PMB_WORK status > artifacts/logs/pmbootstrap-status.txt 2>&1 || true
+          df -h > artifacts/logs/df-h.txt 2>&1 || true
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pmos-begonia-phosh-plasma-cross-${{ github.event.inputs.cross }}
+          path: artifacts/
+          retention-days: 14
