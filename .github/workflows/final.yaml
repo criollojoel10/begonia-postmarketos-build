@@ -24,7 +24,7 @@ on:
       extra_space:
         description: Extra space MB
         required: true
-        default: "1024"
+        default: "2048"
       cross:
         description: Cross compilation
         required: true
@@ -168,9 +168,9 @@ jobs:
 
           echo "=== Start pmbootstrap install ==="
           if [ "$FDE" = "true" ]; then
-            printf '147147\n147147\n' | pmbootstrap "${PMB_FLAGS[@]}" install --fde || true
+            printf '147147\n147147\n' | pmbootstrap "${PMB_FLAGS[@]}" install --fde
           else
-            printf '147147\n147147\n' | pmbootstrap "${PMB_FLAGS[@]}" install || true
+            printf '147147\n147147\n' | pmbootstrap "${PMB_FLAGS[@]}" install
           fi
 
       - name: Export (primary)
