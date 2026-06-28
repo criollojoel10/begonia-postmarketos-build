@@ -179,38 +179,35 @@ jobs:
             printf '147147\n147147\n' | pmbootstrap "${PMB_FLAGS[@]}" install
           fi
 
-      - name: Add Plasma Mobile + GDM to rootfs
+      - name: Build & Add Plasma Mobile UI
         run: |
           set -euxo pipefail
 
-          ROOTFS="$PMB_WORK/chroot_rootfs_xiaomi-begonia"
-
-          if [ ! -d "$ROOTFS" ]; then
-            echo "ERROR: Rootfs not found at $ROOTFS"
-            ls -la "$PMB_WORK/" 2>/dev/null || true
-            exit 1
+          CROSS="${{ github.event.inputs.cross }}"
+          FLAGS=(-c "$PMB_CONFIG" -p "$PMAPORTS_DIR" -w "$PMB_WORK" -t 3600 --details-to-stdout)
+          if [ "$CROSS" = "false" ]; then
+            FLAGS+=(--no-cross)
           fi
 
-          echo "=== Checking rootfs state ==="
-          ls -la "$ROOTFS/"
-          ls -la "$ROOTFS/etc/apk/repositories" 2>/dev/null && cat "$ROOTFS/etc/apk/repositories"
+          # Check what aarch64 packages are available in the remote repos
+          echo "=== Searching for plasma-mobile in pmaports ==="
+          find "$PMAPORTS_DIR" -type d -name "postmarketos-ui-plasma-mobile" 2>/dev/null | head -5
+          find "$PMAPORTS_DIR" -type d -name "plasma-mobile" 2>/dev/null | head -5
 
-          echo "=== Adding Plasma Mobile (KDE) ==="
-          sudo chroot "$ROOTFS" /bin/sh -c 'apk add --no-interactive plasma-mobile postmarketos-ui-plasma-mobile 2>&1' || \
-          sudo chroot "$ROOTFS" /bin/sh -c 'apk add --no-interactive plasma-mobile 2>&1' || true
+          echo "=== Building plasma-mobile UI from pmaports (local compile) ==="
+          pmbootstrap "${FLAGS[@]}" build postmarketos-ui-plasma-mobile 2>&1
 
-          echo "=== Installing GDM (display manager for switching DEs) ==="
-          sudo chroot "$ROOTFS" /bin/sh -c 'apk add --no-interactive gdm gdm-openrc 2>&1' || true
+          echo "=== Building tinydm (needed for multi-UI support) ==="
+          pmbootstrap "${FLAGS[@]}" build tinydm 2>&1 || true
 
-          echo "=== Configuring services ==="
-          # Disable tinydm (Phosh's single-DE autostart)
-          sudo chroot "$ROOTFS" /bin/sh -c 'rc-update del tinydm 2>/dev/null; rc-update del phosh 2>/dev/null; rc-update add gdm 2>/dev/null; rc-update add dbus 2>/dev/null' || true
+          echo "=== Installing plasma-mobile into device rootfs ==="
+          pmbootstrap "${FLAGS[@]}" chroot --rootfs -- apk add --no-interactive postmarketos-ui-plasma-mobile 2>&1
 
-          echo "=== Verifying installed UIs ==="
-          sudo chroot "$ROOTFS" /bin/sh -c 'apk info 2>/dev/null | grep -iE "phosh|plasma|gdm|kwin" | sort' || echo "(grep returned nothing)"
+          echo "=== Verifying installed UIs in rootfs ==="
+          pmbootstrap "${FLAGS[@]}" chroot --rootfs -- sh -c 'apk info 2>/dev/null | grep -iE "phosh|plasma|kwin|plasma" | sort' 2>&1
 
-          echo "=== Rebuilding OS image with both DEs ==="
-          pmbootstrap -c "$PMB_CONFIG" -p "$PMAPORTS_DIR" -w "$PMB_WORK" -E "${{ github.event.inputs.extra_space }}" -t 3600 -j 1 --details-to-stdout install
+          echo "=== Rebuilding OS image with plasma-mobile added ==="
+          pmbootstrap "${FLAGS[@]}" -E "${{ github.event.inputs.extra_space }}" -j 1 install --password 147147 2>&1
 
       - name: Export (primary)
         if: always()
