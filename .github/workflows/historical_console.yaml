@@ -1,0 +1,144 @@
+# Workflow: reconstruir el histórico funcional begonia pmOS console (kernel junio GCC)
+# El histórico que booteaba era el build GCC(6.16.4-r0) de finales de junio.
+# pmaports main pasó el kernel a LLVM (bb84c79b, 15-jul) y ahtí perdió boot.
+# Este workflow PIN-cachea el kernel GCC junio + drivers dongle + cache por hash del fuente.
+name: H histórico pmOS console (kernel junio GCC, drivers dongle, cache)
+
+on:
+  workflow_dispatch:
+    inputs:
+      cross:
+        description: Cross
+        required: true
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+      extra_space:
+        description: Extra space MB
+        required: true
+        default: "2048"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: hist-console-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PMB_CONFIG: ${{ github.workspace }}/pmbootstrap_v3.cfg
+  PMB_WORK: ${{ github.workspace }}/.local/var/pmbootstrap
+  PMAPORTS_DIR: ${{ github.workspace }}/pmaports
+  KERNEL_PKG: linux-postmarketos-mediatek-mt6785
+  KERNEL_PATH: device/testing/linux-postmarketos-mediatek-mt6785
+  KERNEL_SRC_KEY: kernel-src-6.16-gcc-junio-${{ hashFiles('kernel-hist-state/APKBUILD', 'kernel-hist-state/config-postmarketos-mediatek-mt6785.aarch64') }}
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Free disk
+        run: |
+          df -h
+          sudo rm -rf /usr/share/dotnet /usr/share/swift /usr/local/lib/android /opt/hostedtoolcache/CodeQL /usr/local/share/powershell
+          docker system prune -af
+          df -h
+
+      - name: Dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq git python3 python3-pip python3-venv python3-setuptools python3-wheel build-essential bison flex bc cpio zip unzip xz-utils zstd kmod file rsync android-sdk-platform-tools qemu-user-static binfmt-support ca-certificates openssl kpartx util-linux parted e2fsprogs dosfstools findutils coreutils
+
+      - name: Clone pmbootstrap
+        run: |
+          git clone --depth=1 https://gitlab.postmarketos.org/postmarketOS/pmbootstrap.git
+          mkdir -p $HOME/.local/bin
+          ln -sf $PWD/pmbootstrap/pmbootstrap.py $HOME/.local/bin/pmbootstrap
+          echo $HOME/.local/bin >> $GITHUB_PATH
+
+      - name: Clone pmaports + pin kernel GCC junio
+        run: |
+          set -euxo pipefail
+          git clone --depth=1 --branch=${{ github.event.inputs.pmaports_branch || 'main' }} https://gitlab.postmarketos.org/postmarketOS/pmaports.git $PMAPORTS_DIR || \
+            git clone --depth=1 https://gitlab.postmarketos.org/postmarketOS/pmaports.git $PMAPORTS_DIR
+
+          # APKBUILD GCC-junio (mirror GitHub — evita el 502 de archive gitlab en descarga)
+          cp -v kernel-hist-state/APKBUILD $PMAPORTS_DIR/$KERNEL_PATH/APKBUILD
+          cp -v kernel-hist-state/config-postmarketos-mediatek-mt6785.aarch64 $PMAPORTS_DIR/$KERNEL_PATH/config-postmarketos-mediatek-mt6785.aarch64
+          # drivers USB-Ether/WiFi dongle (congelados en el config junio)
+          ./.github/scripts/enable_kernel_drivers.sh
+          grep -E "pkgrel=|builddir=|CC=|CONFIG_USB_RTL8152|CONFIG_RTL8XXXU|CONFIG_MT76X0U" $PMAPORTS_DIR/$KERNEL_PATH/APKBUILD
+
+      # ============ CACHE distfiles+apk pmbootstrap (restaura .apk del paquete si el fuente no cambió) ============
+      - name: Restore kernel distcache
+        id: cache-kernel
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.PMB_WORK }}
+          key: ${{ env.KERNEL_SRC_KEY }}
+          restore-keys: |
+            kernel-src-6.16-gcc-junio-
+
+      - name: Config pmbootstrap
+        run: |
+          rm -rf $PMB_WORK && mkdir -p $HOME/.config
+          mkdir -p $PMB_WORK/cache_git
+          echo "8" > $PMB_WORK/version
+          ln -sfn $PMAPORTS_DIR $PMB_WORK/cache_git/pmaports
+          printf '[pmbootstrap]\naports = %s\nwork = %s\ndevice = xiaomi-begonia\nui = console\nuser = joel\nextra_space = %s\nssh_keys = False\nsudo_timer = True\n\n[build_options]\ncross = %s\n' \
+            "$PMAPORTS_DIR" "$PMB_WORK" "${{ github.event.inputs.extra_space }}" "${{ github.event.inputs.cross }}" > "$PMB_CONFIG"
+          echo "=== config pmbootstrap ==="; cat "$PMB_CONFIG"
+
+      - name: Patch pmbootstrap (CI fixes)
+        run: |
+          bash .github/scripts/patch_pmbootstrap.py
+
+      # ============ BUILD (solo recompila si no hay cache; con cache → checksum/verificación rápida) ============
+      - name: Checksum kernel (con mirror GitHub — sin 502)
+        run: |
+          set -euxo pipefail
+          pmbootstrap -c "$PMB_CONFIG" -p "$PMAPORTS_DIR" -w "$PMB_WORK" -t 3600 --details-to-stdout checksum linux-postmarketos-mediatek-mt6785 2>&1 | tail -20
+
+      - name: Build kernel histórico GCC (force: solo si cache miss)
+        run: |
+          set -euxo pipefail
+          if [ "${{ steps.cache-kernel.outputs.cache-hit }}" != "true" ]; then
+            echo "=== cache miss → kernel rebuild (GCC junio) ==="
+            pmbootstrap -c "$PMB_CONFIG" -p "$PMAPORTS_DIR" -w "$PMB_WORK" -t 3600 --details-to-stdout build linux-postmarketos-mediatek-mt6785 --force 2>&1 | tail -40
+          else
+            echo "=== cache hit → kernel ya construido histórico; verifico + nothing to rebuild ==="
+            ls -la $PMB_WORK/packages/linux-postmarketos-mediatek-mt6785*.apk 2>/dev/null || pmbootstrap -c "$PMB_CONFIG" -p "$PMAPORTS_DIR" -w "$PMB_WORK" -t 3600 --details-to-stdout build linux-postmarketos-mediatek-mt6785
+          fi
+          find "$PMB_WORK/packages" -name "${KERNEL_PKG}*.apk" | xargs -r ls -la
+
+      - name: Install pmOS console
+        run: |
+          printf '147147\n147147\n' | pmbootstrap -c "$PMB_CONFIG" -p "$PMAPORTS_DIR" -w "$PMB_WORK" -t 3600 --details-to-stdout install
+
+      - name: Export images
+        if: always()
+        run: |
+          mkdir -p artifacts/export
+          pmbootstrap -c "$PMB_CONFIG" -p "$PMAPORTS_DIR" -w "$PMB_WORK" -t 3600 --details-to-stdout export || true
+          cp -av /tmp/postmarketOS-export/* artifacts/export/ 2>/dev/null || true
+          find artifacts/export -type f -printf "%p %s bytes\n" | sort
+
+      - name: Checksums
+        if: always()
+        run: |
+          find artifacts -type f -not -name SHA256SUMS.txt -print0 | xargs -0 sha256sum > artifacts/SHA256SUMS.txt 2>/dev/null || true
+          cat artifacts/SHA256SUMS.txt 2>/dev/null || true
+
+      - name: Upload
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pmos-begonia-console-historical-gcc
+          path: artifacts/
+          retention-days: 30
